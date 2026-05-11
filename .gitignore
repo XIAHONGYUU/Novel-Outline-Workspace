@@ -38,3 +38,6 @@ pnpm-debug.log*
 # Misc
 *.swp
 *.swo
+
+# Local demo workspaces
+demo-workspace/
