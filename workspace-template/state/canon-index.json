@@ -1,0 +1,16 @@
+{
+  "novel_name": "{{NOVEL_NAME}}",
+  "characters": [
+    {
+      "id": "char-protagonist",
+      "name": "{{PROTAGONIST_NAME}}",
+      "aliases": [],
+      "role": "protagonist",
+      "status": "alive",
+      "death_event_id": null
+    }
+  ],
+  "locations": [],
+  "factions": [],
+  "items": []
+}
