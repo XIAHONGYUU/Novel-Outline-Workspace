@@ -1,0 +1,30 @@
+{
+  "novel_name": "{{NOVEL_NAME}}",
+  "protagonist_name": "{{PROTAGONIST_NAME}}",
+  "workspace_mode": "fresh",
+  "idea_counts": {
+    "total": 0,
+    "pending": 0,
+    "applied": 0,
+    "rejected": 0
+  },
+  "entity_counts": {
+    "characters": 0,
+    "events": 0,
+    "scenes": 0
+  },
+  "view_files": {
+    "index": "views/index.html",
+    "validation_report": "views/validation-report.html",
+    "timeline": "views/timeline.html"
+  },
+  "last_validation": {
+    "ok": false,
+    "error_count": 0,
+    "warning_count": 0,
+    "report_path": null,
+    "validated_at": null
+  },
+  "recommended_next_step": "先录入第一批想法，再整理 canon / outline / timeline。",
+  "updated_at": null
+}
