@@ -141,34 +141,53 @@ def _html_page(title: str, body: str) -> str:
   <title>{_safe(title)}</title>
   <style>
     :root {{
-      --bg: #f5efe5;
-      --panel: rgba(255,255,255,0.82);
-      --ink: #1d1a17;
-      --muted: #5c544c;
-      --line: rgba(62, 40, 24, 0.14);
-      --accent: #9a3412;
-      --accent-soft: #fdba74;
-      --error: #b91c1c;
+      --bg: #f4ecdf;
+      --panel: rgba(255, 252, 247, 0.82);
+      --panel-strong: rgba(255, 250, 242, 0.94);
+      --ink: #1f1a17;
+      --muted: #62584f;
+      --line: rgba(73, 49, 29, 0.14);
+      --accent: #9f3c17;
+      --accent-2: #c76a19;
+      --accent-soft: #f8c98d;
+      --error: #b42318;
       --warn: #b45309;
       --ok: #166534;
+      --shadow: 0 18px 50px rgba(79, 54, 34, 0.09);
     }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
       color: var(--ink);
       background:
-        radial-gradient(circle at top left, rgba(251, 191, 36, 0.28), transparent 28rem),
-        radial-gradient(circle at bottom right, rgba(217, 119, 6, 0.18), transparent 24rem),
-        linear-gradient(180deg, #fbf7f0 0%, #efe6d8 100%);
-      font-family: "Iowan Old Style", "Palatino Linotype", "Noto Serif SC", serif;
+        radial-gradient(circle at top left, rgba(248, 201, 141, 0.34), transparent 28rem),
+        radial-gradient(circle at top right, rgba(193, 104, 35, 0.16), transparent 20rem),
+        radial-gradient(circle at bottom right, rgba(198, 126, 48, 0.16), transparent 24rem),
+        linear-gradient(180deg, #fbf6ee 0%, #ede2d0 100%);
+      font-family: "Iowan Old Style", "Palatino Linotype", "Baskerville", "Noto Serif SC", serif;
     }}
-    main {{ max-width: 1100px; margin: 0 auto; padding: 32px 20px 64px; }}
+    main {{ max-width: 1240px; margin: 0 auto; padding: 28px 20px 64px; }}
     header.hero {{
-      padding: 24px 28px;
+      position: relative;
+      overflow: hidden;
+      padding: 28px 30px 30px;
       border: 1px solid var(--line);
-      background: linear-gradient(135deg, rgba(255,255,255,0.88), rgba(255,244,230,0.78));
-      border-radius: 24px;
-      box-shadow: 0 18px 50px rgba(82, 54, 31, 0.10);
+      background:
+        radial-gradient(circle at 85% 20%, rgba(248, 201, 141, 0.42), transparent 13rem),
+        linear-gradient(135deg, rgba(255,255,255,0.88), rgba(255,244,230,0.84));
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+    }}
+    header.hero::after {{
+      content: "";
+      position: absolute;
+      right: -40px;
+      top: -40px;
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(159, 60, 23, 0.10), transparent 70%);
+      pointer-events: none;
     }}
     nav {{
       margin-top: 16px;
@@ -180,9 +199,14 @@ def _html_page(title: str, body: str) -> str:
       color: var(--ink);
       text-decoration: none;
       border: 1px solid var(--line);
-      padding: 8px 12px;
+      padding: 9px 13px;
       border-radius: 999px;
-      background: rgba(255,255,255,0.6);
+      background: rgba(255,255,255,0.64);
+      transition: transform 160ms ease, background 160ms ease;
+    }}
+    nav a:hover {{
+      transform: translateY(-1px);
+      background: rgba(255,255,255,0.9);
     }}
     .grid {{
       display: grid;
@@ -190,13 +214,27 @@ def _html_page(title: str, body: str) -> str:
       gap: 16px;
       margin-top: 24px;
     }}
+    .layout {{
+      display: grid;
+      grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.95fr);
+      gap: 18px;
+      margin-top: 24px;
+      align-items: start;
+    }}
+    .stack {{
+      display: grid;
+      gap: 18px;
+    }}
     .panel {{
       border: 1px solid var(--line);
-      border-radius: 20px;
+      border-radius: 22px;
       background: var(--panel);
       backdrop-filter: blur(12px);
       padding: 18px 20px;
       box-shadow: 0 12px 30px rgba(82, 54, 31, 0.08);
+    }}
+    .panel.strong {{
+      background: var(--panel-strong);
     }}
     .eyebrow {{
       color: var(--muted);
@@ -206,11 +244,17 @@ def _html_page(title: str, body: str) -> str:
     }}
     h1, h2, h3, p {{ margin-top: 0; }}
     h1 {{ font-size: clamp(2rem, 5vw, 3.5rem); margin-bottom: 8px; }}
-    h2 {{ font-size: 1.25rem; margin-bottom: 12px; }}
+    h2 {{ font-size: 1.22rem; margin-bottom: 12px; }}
+    h3 {{ font-size: 1rem; margin-bottom: 8px; }}
     .metric {{
-      font-size: 2rem;
+      font-size: 2.15rem;
       font-weight: 700;
       margin: 8px 0 0;
+    }}
+    .submetric {{
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin: 6px 0 0;
     }}
     .badge {{
       display: inline-block;
@@ -223,9 +267,127 @@ def _html_page(title: str, body: str) -> str:
     .badge.error {{ background: rgba(185, 28, 28, 0.12); color: var(--error); }}
     .badge.warning {{ background: rgba(180, 83, 9, 0.12); color: var(--warn); }}
     .badge.ok {{ background: rgba(22, 101, 52, 0.12); color: var(--ok); }}
+    .badge.soft {{ background: rgba(99, 92, 84, 0.10); color: var(--muted); }}
+    .hero-top {{
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+    }}
+    .hero-copy {{
+      max-width: 760px;
+      position: relative;
+      z-index: 1;
+    }}
+    .hero-copy p {{
+      color: var(--muted);
+      font-size: 1.02rem;
+      line-height: 1.6;
+      margin-bottom: 0;
+    }}
+    .hero-rail {{
+      min-width: 220px;
+      display: grid;
+      gap: 10px;
+      position: relative;
+      z-index: 1;
+    }}
+    .rail-card {{
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px 16px;
+      background: rgba(255,255,255,0.66);
+    }}
+    .rail-card strong {{
+      display: block;
+      font-size: 1.05rem;
+      margin-bottom: 4px;
+    }}
+    .story-stats {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 24px;
+      position: relative;
+      z-index: 1;
+    }}
+    .stat-card {{
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 16px 18px;
+      background: rgba(255,255,255,0.66);
+    }}
+    .stat-card .eyebrow {{
+      margin-bottom: 4px;
+    }}
+    .section-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      margin-bottom: 14px;
+    }}
+    .section-head p {{
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin-bottom: 0;
+    }}
+    .action-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }}
+    .action-card {{
+      display: block;
+      text-decoration: none;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+      background: rgba(255,255,255,0.62);
+      transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+    }}
+    .action-card:hover {{
+      transform: translateY(-2px);
+      box-shadow: 0 14px 28px rgba(82, 54, 31, 0.10);
+      border-color: rgba(159, 60, 23, 0.24);
+    }}
+    .action-card strong {{
+      display: block;
+      margin-bottom: 6px;
+      font-size: 1rem;
+    }}
+    .action-card span {{
+      color: var(--muted);
+      font-size: 0.94rem;
+      line-height: 1.45;
+    }}
     ul.clean {{ list-style: none; padding: 0; margin: 0; }}
     ul.clean li {{ padding: 10px 0; border-top: 1px solid var(--line); }}
     ul.clean li:first-child {{ border-top: none; padding-top: 0; }}
+    .list-card {{
+      display: grid;
+      gap: 10px;
+    }}
+    .list-row {{
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px 15px;
+      background: rgba(255,255,255,0.58);
+    }}
+    .list-row strong {{
+      display: block;
+      margin-bottom: 6px;
+    }}
+    .meta {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }}
+    .meta code {{
+      background: rgba(62, 40, 24, 0.07);
+    }}
     table {{
       width: 100%;
       border-collapse: collapse;
@@ -244,6 +406,60 @@ def _html_page(title: str, body: str) -> str:
       border-radius: 16px;
       color: var(--muted);
       background: rgba(255,255,255,0.45);
+    }}
+    .progress-wrap {{
+      display: grid;
+      gap: 10px;
+    }}
+    .progress-row {{
+      display: grid;
+      gap: 7px;
+    }}
+    .progress-label {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 0.95rem;
+    }}
+    .progress-bar {{
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(98, 88, 79, 0.12);
+      overflow: hidden;
+    }}
+    .progress-fill {{
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    }}
+    .workspace-map {{
+      display: grid;
+      gap: 12px;
+    }}
+    .map-item {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 12px 14px;
+      background: rgba(255,255,255,0.56);
+    }}
+    .chapter-strip {{
+      display: grid;
+      gap: 10px;
+    }}
+    .chapter-card {{
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px 15px;
+      background: rgba(255,255,255,0.56);
+    }}
+    .chapter-card p {{
+      color: var(--muted);
+      margin-bottom: 0;
+      line-height: 1.5;
     }}
     .timeline {{
       position: relative;
@@ -284,6 +500,35 @@ def _html_page(title: str, body: str) -> str:
       border-radius: 6px;
       font-size: 0.92em;
     }}
+    @media (max-width: 980px) {{
+      .layout {{
+        grid-template-columns: 1fr;
+      }}
+      .story-stats {{
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }}
+    }}
+    @media (max-width: 760px) {{
+      main {{
+        padding: 20px 14px 44px;
+      }}
+      header.hero {{
+        padding: 22px 18px 22px;
+      }}
+      .hero-top {{
+        flex-direction: column;
+      }}
+      .hero-rail {{
+        width: 100%;
+        min-width: 0;
+      }}
+      .story-stats {{
+        grid-template-columns: 1fr;
+      }}
+      .action-grid {{
+        grid-template-columns: 1fr;
+      }}
+    }}
   </style>
 </head>
 <body>
@@ -310,58 +555,284 @@ def _render_status_html(workspace: Path, status: dict[str, Any]) -> str:
     idea_counts = status.get("idea_counts", {})
     entity_counts = status.get("entity_counts", {})
     last_validation = status.get("last_validation", {})
-    core_file_items = "\n".join(
-        f"<li><strong>{_safe(path)}</strong> <span class=\"badge {'ok' if exists else 'warning'}\">{'ready' if exists else 'missing'}</span></li>"
-        for path, exists in status.get("core_files", {}).items()
-    )
     ideas = read_json(workspace / "state/idea-log.json", {"ideas": []}).get("ideas", [])
-    recent_ideas = list(reversed(ideas[-5:]))
-    recent_idea_items = "\n".join(
-        f"<li><strong>{_safe(idea.get('title'))}</strong> <span class=\"badge {'warning' if idea.get('status') == 'pending' else 'ok'}\">{_safe(idea.get('status'))}</span><br><span>{_safe(idea.get('content', ''))}</span></li>"
-        for idea in recent_ideas
-    )
-    if not recent_idea_items:
-        recent_idea_items = '<div class="empty">还没有 idea 记录。</div>'
+    pending_ideas = [idea for idea in ideas if idea.get("status") == "pending"]
+    applied_ideas = [idea for idea in ideas if idea.get("status") == "applied"]
+    merge_plan_dir = workspace / "state/merge-plans"
+    merge_plan_files = sorted(merge_plan_dir.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True) if merge_plan_dir.exists() else []
+    latest_merge_plans = [read_json(path, {}) for path in merge_plan_files[:4]]
+    events = read_json(workspace / "timeline/events.json", {"events": []}).get("events", [])
+    recent_events = sorted(
+        events,
+        key=lambda item: (
+            item.get("chronological_index") if isinstance(item.get("chronological_index"), int) else 10**9,
+            str(item.get("id", "")),
+        ),
+    )[:4]
+    scene_index = read_json(workspace / "outline/scene-index.json", {"chapters": []})
+    chapters = sorted(scene_index.get("chapters", []), key=lambda item: item.get("chapter", 10**9))
+    recent_chapters = chapters[:4]
+
+    core_ready = sum(1 for exists in status.get("core_files", {}).values() if exists)
+    core_total = max(len(status.get("core_files", {})), 1)
+    core_ratio = int((core_ready / core_total) * 100)
+    structure_target = 12
+    structure_progress = min(100, int(((entity_counts.get("events", 0) + entity_counts.get("scenes", 0)) / structure_target) * 100))
+    merge_health = 100 if idea_counts.get("total", 0) == 0 else max(0, int((1 - (idea_counts.get("pending", 0) / max(idea_counts.get("total", 1), 1))) * 100))
+
+    if last_validation.get("error_count", 0) > 0:
+        state_sentence = "工作区当前处于修复期，应该先清理硬冲突，再继续推进剧情和设定。"
+    elif pending_ideas:
+        state_sentence = "当前最重要的是处理 merge 队列，把零散 idea 尽快转成正式 canon、timeline 和 scene。"
+    elif entity_counts.get("events", 0) == 0 or entity_counts.get("scenes", 0) == 0:
+        state_sentence = "故事骨架还在搭建期，建议先补关键事件和核心 scene，让时间线真正立起来。"
+    else:
+        state_sentence = "工作区已经进入稳定推进状态，适合继续扩写章节、补场景和做更细的冲突校验。"
+
+    core_file_items = "\n".join(
+        f"""
+        <div class="map-item">
+          <div>
+            <strong>{_safe(path)}</strong>
+            <div class="submetric">核心状态文件</div>
+          </div>
+          <span class="badge {'ok' if exists else 'warning'}">{'ready' if exists else 'missing'}</span>
+        </div>
+        """
+        for path, exists in status.get("core_files", {}).items()
+    ) or '<div class="empty">当前还没有核心状态文件。</div>'
+
+    pending_idea_markup = "\n".join(
+        f"""
+        <div class="list-row">
+          <strong>{_safe(idea.get('title'))}</strong>
+          <div>{_safe(idea.get('content', ''))}</div>
+          <div class="meta">
+            <span class="badge warning">{_safe(idea.get('kind'))}</span>
+            <code>{_safe(idea.get('id'))}</code>
+          </div>
+        </div>
+        """
+        for idea in pending_ideas[:4]
+    ) or '<div class="empty">当前没有 pending ideas，merge 队列是空的。</div>'
+
+    merge_plan_markup = "\n".join(
+        f"""
+        <div class="list-row">
+          <strong>{_safe(plan.get('title') or plan.get('idea_id'))}</strong>
+          <div>{_safe(' / '.join(plan.get('suggested_domains', [])) or '未分类')}</div>
+          <div class="meta">
+            <code>{_safe(plan.get('idea_id'))}</code>
+            <span class="badge soft">{_safe(plan.get('created_at') or 'unknown')}</span>
+          </div>
+        </div>
+        """
+        for plan in latest_merge_plans
+    ) or '<div class="empty">当前还没有 merge plans。先为 pending idea 生成计划。</div>'
+
+    event_markup = "\n".join(
+        f"""
+        <div class="list-row">
+          <strong>{_safe(event.get('label', event.get('id')))}</strong>
+          <div class="meta">
+            <span class="badge soft">chronological #{_safe(event.get('chronological_index', '?'))}</span>
+            <span class="badge soft">chapter {_safe(event.get('reading_chapter', '-'))}</span>
+            <code>{_safe(event.get('location') or 'location unset')}</code>
+          </div>
+        </div>
+        """
+        for event in recent_events
+    ) or '<div class="empty">还没有正式事件。时间线页目前会保持空白。</div>'
+
+    chapter_markup = "\n".join(
+        f"""
+        <div class="chapter-card">
+          <strong>第 {_safe(chapter.get('chapter'))} 章</strong>
+          <div class="meta">
+            <span class="badge soft">{len(chapter.get('scenes', []))} scenes</span>
+            <span class="badge soft">{_safe(chapter.get('title') or '未命名章节')}</span>
+          </div>
+          <p>{_safe(chapter.get('summary') or '当前还没有章节摘要。')}</p>
+        </div>
+        """
+        for chapter in recent_chapters
+    ) or '<div class="empty">还没有章节卡片。先补 `outline/scene-index.json`。</div>'
 
     body = f"""
     <header class="hero">
-      <div class="eyebrow">Novel Outline Workspace</div>
-      <h1>{_safe(status.get('novel_name'))}</h1>
-      <p>主角：{_safe(status.get('protagonist_name') or '未设置')} · 模式：<code>{_safe(status.get('workspace_mode'))}</code></p>
-      {_status_badge(status)}
-      <nav>
-        <a href="index.html">总览</a>
-        <a href="validation-report.html">校验报告</a>
-        <a href="timeline.html">时间线</a>
-      </nav>
+      <div class="hero-top">
+        <div class="hero-copy">
+          <div class="eyebrow">Novel Outline Workspace</div>
+          <h1>{_safe(status.get('novel_name'))}</h1>
+          <p>{_safe(state_sentence)}</p>
+          <nav>
+            <a href="index.html">总览</a>
+            <a href="validation-report.html">校验报告</a>
+            <a href="timeline.html">时间线</a>
+            <a href="merge-plans/">Merge Plans</a>
+          </nav>
+        </div>
+        <div class="hero-rail">
+          <div class="rail-card">
+            <div class="eyebrow">Workspace Mode</div>
+            <strong>{_safe(status.get('workspace_mode'))}</strong>
+            {_status_badge(status)}
+          </div>
+          <div class="rail-card">
+            <div class="eyebrow">Protagonist</div>
+            <strong>{_safe(status.get('protagonist_name') or '未设置')}</strong>
+            <span class="submetric">updated at {_safe(status.get('updated_at'))}</span>
+          </div>
+        </div>
+      </div>
+      <div class="story-stats">
+        <article class="stat-card"><div class="eyebrow">Idea Pool</div><div class="metric">{idea_counts.get('total', 0)}</div><div class="submetric">pending {idea_counts.get('pending', 0)} / applied {idea_counts.get('applied', 0)}</div></article>
+        <article class="stat-card"><div class="eyebrow">Characters</div><div class="metric">{entity_counts.get('characters', 0)}</div><div class="submetric">正式角色索引</div></article>
+        <article class="stat-card"><div class="eyebrow">Events</div><div class="metric">{entity_counts.get('events', 0)}</div><div class="submetric">真实时间线节点</div></article>
+        <article class="stat-card"><div class="eyebrow">Scenes</div><div class="metric">{entity_counts.get('scenes', 0)}</div><div class="submetric">正式场景节点</div></article>
+      </div>
     </header>
-    <section class="grid">
-      <article class="panel"><div class="eyebrow">Ideas</div><div class="metric">{idea_counts.get('total', 0)}</div><p>pending: {idea_counts.get('pending', 0)} / applied: {idea_counts.get('applied', 0)}</p></article>
-      <article class="panel"><div class="eyebrow">Characters</div><div class="metric">{entity_counts.get('characters', 0)}</div><p>正式角色索引条目</p></article>
-      <article class="panel"><div class="eyebrow">Events</div><div class="metric">{entity_counts.get('events', 0)}</div><p>时间线事件节点</p></article>
-      <article class="panel"><div class="eyebrow">Scenes</div><div class="metric">{entity_counts.get('scenes', 0)}</div><p>正式场景节点</p></article>
+    <section class="layout">
+      <div class="stack">
+        <article class="panel strong">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Command Desk</div>
+              <h2>下一步应该做什么</h2>
+            </div>
+            <span class="badge {'error' if last_validation.get('error_count', 0) > 0 else 'warning' if pending_ideas else 'ok'}">{_safe(status.get('workspace_mode'))}</span>
+          </div>
+          <div class="action-grid">
+            <a class="action-card" href="validation-report.html">
+              <strong>检查冲突与校验</strong>
+              <span>先看当前有没有硬错误、引用失效或结构缺口。</span>
+            </a>
+            <a class="action-card" href="timeline.html">
+              <strong>推进时间线</strong>
+              <span>把关键事件和阅读章节挂起来，避免剧情发展失焦。</span>
+            </a>
+            <a class="action-card" href="merge-plans/">
+              <strong>处理 Merge 队列</strong>
+              <span>把 pending idea 变成正式的 merge plan 和可执行补丁。</span>
+            </a>
+            <a class="action-card" href="../state/workspace-status.json">
+              <strong>检查状态源</strong>
+              <span>直接回到 JSON 真相源确认 mode、counts 和最新校验时间。</span>
+            </a>
+          </div>
+          <p class="submetric" style="margin-top: 16px;">{_safe(status.get('recommended_next_step'))}</p>
+        </article>
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Merge Desk</div>
+              <h2>Pending Ideas</h2>
+            </div>
+            <span class="badge {'warning' if pending_ideas else 'ok'}">{len(pending_ideas)} waiting</span>
+          </div>
+          <div class="list-card">{pending_idea_markup}</div>
+        </article>
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Story Surface</div>
+              <h2>最近事件与章节</h2>
+            </div>
+            <p>首页优先呈现当前最关键的剧情骨架。</p>
+          </div>
+          <div class="grid" style="margin-top: 0;">
+            <div class="panel strong">
+              <h3>Recent Events</h3>
+              <div class="list-card">{event_markup}</div>
+            </div>
+            <div class="panel strong">
+              <h3>Chapter Snapshot</h3>
+              <div class="chapter-strip">{chapter_markup}</div>
+            </div>
+          </div>
+        </article>
+      </div>
+      <div class="stack">
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Health</div>
+              <h2>工作区健康度</h2>
+            </div>
+            <span class="badge {'error' if last_validation.get('error_count', 0) > 0 else 'ok'}">{'repair needed' if last_validation.get('error_count', 0) > 0 else 'stable'}</span>
+          </div>
+          <div class="progress-wrap">
+            <div class="progress-row">
+              <div class="progress-label"><span>Core Files</span><span>{core_ratio}%</span></div>
+              <div class="progress-bar"><div class="progress-fill" style="width: {core_ratio}%;"></div></div>
+            </div>
+            <div class="progress-row">
+              <div class="progress-label"><span>Structure Coverage</span><span>{structure_progress}%</span></div>
+              <div class="progress-bar"><div class="progress-fill" style="width: {structure_progress}%;"></div></div>
+            </div>
+            <div class="progress-row">
+              <div class="progress-label"><span>Merge Queue Health</span><span>{merge_health}%</span></div>
+              <div class="progress-bar"><div class="progress-fill" style="width: {merge_health}%;"></div></div>
+            </div>
+          </div>
+          <div class="meta" style="margin-top: 14px;">
+            <span class="badge {'error' if last_validation.get('error_count', 0) > 0 else 'ok'}">errors {last_validation.get('error_count', 0)}</span>
+            <span class="badge {'warning' if last_validation.get('warning_count', 0) > 0 else 'ok'}">warnings {last_validation.get('warning_count', 0)}</span>
+            <span class="badge soft">applied {len(applied_ideas)}</span>
+          </div>
+        </article>
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Latest Plans</div>
+              <h2>Merge Plans</h2>
+            </div>
+            <span class="badge soft">{len(latest_merge_plans)} visible</span>
+          </div>
+          <div class="list-card">{merge_plan_markup}</div>
+        </article>
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Workspace Map</div>
+              <h2>核心文件状态</h2>
+            </div>
+            <p>确保工作台始终有可用的状态源。</p>
+          </div>
+          <div class="workspace-map">{core_file_items}</div>
+        </article>
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Latest Validation</div>
+              <h2>校验摘要</h2>
+            </div>
+          </div>
+          <p>validated_at: <code>{_safe(last_validation.get('validated_at') or '未运行')}</code></p>
+          <p>report_path: <code>{_safe(last_validation.get('report_path') or '未生成')}</code></p>
+          <p class="submetric">{_safe(status.get('recommended_next_step'))}</p>
+        </article>
+      </div>
     </section>
     <section class="grid">
       <article class="panel">
-        <h2>下一步</h2>
-        <p>{_safe(status.get('recommended_next_step'))}</p>
-        <p class="eyebrow">updated at {_safe(status.get('updated_at'))}</p>
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Reality Check</div>
+            <h2>工作区事实面</h2>
+          </div>
+          <span class="badge soft">source of truth</span>
+        </div>
+        <p>当前事实层以 `state/*.json`、`timeline/events.json`、`outline/scene-index.json` 为准。HTML 负责展示，不反向作为编辑真相源。</p>
       </article>
       <article class="panel">
-        <h2>最近校验</h2>
-        <p>ok: <code>{_safe(last_validation.get('ok'))}</code></p>
-        <p>errors: <code>{_safe(last_validation.get('error_count'))}</code> · warnings: <code>{_safe(last_validation.get('warning_count'))}</code></p>
-        <p>validated_at: <code>{_safe(last_validation.get('validated_at') or '未运行')}</code></p>
-      </article>
-    </section>
-    <section class="grid">
-      <article class="panel">
-        <h2>核心文件</h2>
-        <ul class="clean">{core_file_items}</ul>
-      </article>
-      <article class="panel">
-        <h2>最近想法</h2>
-        <ul class="clean">{recent_idea_items}</ul>
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Operating Note</div>
+            <h2>操作节奏</h2>
+          </div>
+        </div>
+        <p>推荐节奏：先收 idea，再做 merge plan，再结构化 apply，最后跑 validator 和 HTML 重渲染。</p>
       </article>
     </section>
     """
