@@ -47,6 +47,92 @@ def _replace_placeholders(text: str, novel_name: str, protagonist_name: str) -> 
     return text.replace("{{NOVEL_NAME}}", novel_name).replace("{{PROTAGONIST_NAME}}", protagonist_name)
 
 
+IDEA_KIND_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "reveal": ("真相", "身份", "秘密", "泄密", "揭露", "知道", "知情", "暴露", "发现", "意识到"),
+    "scene": ("场景", "夜谈", "对话", "相遇", "初见", " confrontation", "谈判"),
+    "event": ("发生", "爆发", "到达", "出发", "来袭", "遇袭", "转折"),
+    "character": ("新角色", "角色", "师姐", "导师", "反派", " rival", " mentor"),
+    "death": ("死", "死亡", "牺牲", "殒命"),
+    "relationship": ("认识", "结盟", "背叛", "误会", "和解", "决裂"),
+    "world": ("规则", "世界观", "法则", "系统", "设定"),
+    "twist": ("反转", "其实", "原来", "真正", "假装"),
+}
+
+KIND_DEFAULT_TARGETS: dict[str, tuple[str, ...]] = {
+    "reveal": ("outline/master-outline.md", "outline/scene-index.json", "timeline/events.json"),
+    "scene": ("outline/master-outline.md", "outline/scene-index.json"),
+    "event": ("timeline/events.json", "outline/scene-index.json"),
+    "character": ("state/canon-index.json", "canon/characters.md"),
+    "relationship": ("state/canon-index.json", "canon/characters.md", "outline/master-outline.md"),
+    "world": ("state/canon-index.json", "canon/world-rules.md"),
+    "death": ("state/canon-index.json", "timeline/events.json", "outline/scene-index.json"),
+    "twist": ("outline/master-outline.md", "timeline/events.json"),
+    "misc": ("outline/master-outline.md",),
+}
+
+STOP_TAGS = {
+    "一个",
+    "一些",
+    "这个",
+    "那个",
+    "我们",
+    "他们",
+    "她们",
+    "你们",
+    "自己",
+    "现在",
+    "然后",
+    "但是",
+    "因为",
+    "如果",
+    "需要",
+    "应该",
+    "可以",
+    "关于",
+    "剧情",
+    "大纲",
+    "角色",
+    "确认",
+    "继续",
+    "可能",
+    "不会",
+    "一边",
+    "提前",
+    "内部",
+    "有人",
+    "没有",
+    "告诉",
+}
+
+NOISY_TAG_FRAGMENTS = (
+    "在",
+    "可能",
+    "继续",
+    "不会",
+    "确认",
+    "站在",
+    "一边",
+    "有人",
+    "没有",
+    "提前",
+)
+
+CN_NUM_MAP = {
+    "零": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+}
+
+
 def _default_status(workspace: Path) -> dict[str, Any]:
     return {
         "workspace_path": str(workspace),
@@ -60,6 +146,7 @@ def _default_status(workspace: Path) -> dict[str, Any]:
             "index": "views/index.html",
             "validation_report": "views/validation-report.html",
             "timeline": "views/timeline.html",
+            "consistency_index": "views/consistency-checks/index.html",
         },
         "last_validation": {
             "ok": False,
@@ -561,6 +648,9 @@ def _render_status_html(workspace: Path, status: dict[str, Any]) -> str:
     merge_plan_dir = workspace / "state/merge-plans"
     merge_plan_files = sorted(merge_plan_dir.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True) if merge_plan_dir.exists() else []
     latest_merge_plans = [read_json(path, {}) for path in merge_plan_files[:4]]
+    consistency_dir = workspace / "state/consistency-checks"
+    consistency_files = sorted(consistency_dir.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True) if consistency_dir.exists() else []
+    latest_consistency_reports = [read_json(path, {}) for path in consistency_files[:4]]
     events = read_json(workspace / "timeline/events.json", {"events": []}).get("events", [])
     recent_events = sorted(
         events,
@@ -629,6 +719,20 @@ def _render_status_html(workspace: Path, status: dict[str, Any]) -> str:
         """
         for plan in latest_merge_plans
     ) or '<div class="empty">当前还没有 merge plans。先为 pending idea 生成计划。</div>'
+
+    consistency_markup = "\n".join(
+        f"""
+        <div class="list-row">
+          <strong>{_safe(report.get('title') or report.get('idea_id'))}</strong>
+          <div>{_safe('conflicts ' + str(report.get('conflict_count', 0)) + ' / warnings ' + str(report.get('warning_count', 0)))}</div>
+          <div class="meta">
+            <code>{_safe(report.get('idea_id'))}</code>
+            <span class="badge {'warning' if report.get('conflict_count', 0) > 0 or report.get('error_count', 0) > 0 else 'ok'}">{'needs review' if report.get('conflict_count', 0) > 0 or report.get('error_count', 0) > 0 else 'clear'}</span>
+          </div>
+        </div>
+        """
+        for report in latest_consistency_reports
+    ) or '<div class="empty">当前还没有 idea-level consistency reports。</div>'
 
     event_markup = "\n".join(
         f"""
@@ -715,6 +819,10 @@ def _render_status_html(workspace: Path, status: dict[str, Any]) -> str:
               <strong>处理 Merge 队列</strong>
               <span>把 pending idea 变成正式的 merge plan 和可执行补丁。</span>
             </a>
+            <a class="action-card" href="consistency-checks/index.html">
+              <strong>先看 Consistency</strong>
+              <span>在并入之前先检查单条 idea 是否和现有 canon、timeline、scene 冲突。</span>
+            </a>
             <a class="action-card" href="../state/workspace-status.json">
               <strong>检查状态源</strong>
               <span>直接回到 JSON 真相源确认 mode、counts 和最新校验时间。</span>
@@ -780,6 +888,16 @@ def _render_status_html(workspace: Path, status: dict[str, Any]) -> str:
             <span class="badge {'warning' if last_validation.get('warning_count', 0) > 0 else 'ok'}">warnings {last_validation.get('warning_count', 0)}</span>
             <span class="badge soft">applied {len(applied_ideas)}</span>
           </div>
+        </article>
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Consistency Gate</div>
+              <h2>Recent Consistency Checks</h2>
+            </div>
+            <span class="badge soft">{len(latest_consistency_reports)} visible</span>
+          </div>
+          <div class="list-card">{consistency_markup}</div>
         </article>
         <article class="panel">
           <div class="section-head">
@@ -928,6 +1046,42 @@ def _render_timeline_html(workspace: Path, status: dict[str, Any]) -> str:
     return _html_page(f"{status.get('novel_name')} · 时间线", body)
 
 
+def _render_consistency_index_html(workspace: Path, status: dict[str, Any]) -> str:
+    consistency_dir = workspace / "state/consistency-checks"
+    report_files = sorted(consistency_dir.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True) if consistency_dir.exists() else []
+    reports = [read_json(path, {}) for path in report_files]
+    rows = "\n".join(
+        f"""
+        <tr>
+          <td><code>{_safe(report.get('idea_id'))}</code></td>
+          <td>{_safe(report.get('title'))}</td>
+          <td>{_safe(report.get('conflict_count', 0))}</td>
+          <td>{_safe(report.get('warning_count', 0))}</td>
+          <td><span class="badge {'warning' if report.get('conflict_count', 0) > 0 or report.get('error_count', 0) > 0 else 'ok'}">{'needs review' if report.get('conflict_count', 0) > 0 or report.get('error_count', 0) > 0 else 'clear'}</span></td>
+          <td><a href="{_safe(Path(report.get('view_path', '')).name or '')}">详情</a></td>
+        </tr>
+        """
+        for report in reports
+    )
+    body = f"""
+    <header class="hero">
+      <div class="eyebrow">Consistency Gate</div>
+      <h1>{_safe(status.get('novel_name'))} Consistency Checks</h1>
+      <p>这里汇总每条 idea 在 merge 前做的独立 consistency 检查。</p>
+      <nav>
+        <a href="../index.html">总览</a>
+        <a href="../validation-report.html">校验报告</a>
+        <a href="../timeline.html">时间线</a>
+      </nav>
+    </header>
+    <section class="panel" style="margin-top: 24px;">
+      <h2>Reports</h2>
+      {f'<table><thead><tr><th>Idea</th><th>Title</th><th>Conflicts</th><th>Warnings</th><th>Status</th><th>View</th></tr></thead><tbody>{rows}</tbody></table>' if rows else '<div class="empty">当前还没有 consistency reports。</div>'}
+    </section>
+    """
+    return _html_page(f"{status.get('novel_name')} · Consistency Checks", body)
+
+
 def render_workspace_views(
     workspace: Path,
     status: dict[str, Any] | None = None,
@@ -947,11 +1101,14 @@ def render_workspace_views(
     index_path = workspace / "views/index.html"
     validation_path = workspace / "views/validation-report.html"
     timeline_path = workspace / "views/timeline.html"
+    consistency_index_path = workspace / "views/consistency-checks/index.html"
 
     write_text(index_path, _render_status_html(workspace, status))
     write_text(validation_path, _render_validation_html(validation_report, status))
     write_text(timeline_path, _render_timeline_html(workspace, status))
+    write_text(consistency_index_path, _render_consistency_index_html(workspace, status))
     return {
+        "consistency_index": str(consistency_index_path.resolve()),
         "index": str(index_path.resolve()),
         "validation_report": str(validation_path.resolve()),
         "timeline": str(timeline_path.resolve()),
@@ -992,6 +1149,281 @@ def _next_idea_id(existing: list[dict[str, Any]]) -> str:
     return f"{prefix}{max_seq + 1:03d}"
 
 
+def _dedupe_keep_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+    for item in items:
+        value = item.strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        output.append(value)
+    return output
+
+
+def infer_idea_kind(title: str, content: str, explicit_kind: str | None = None) -> str:
+    if explicit_kind and explicit_kind != "auto":
+        return explicit_kind
+
+    haystack = f"{title}\n{content}".lower()
+    best_kind = "misc"
+    best_score = 0
+    for kind, keywords in IDEA_KIND_KEYWORDS.items():
+        score = sum(1 for keyword in keywords if keyword.lower() in haystack)
+        if score > best_score:
+            best_kind = kind
+            best_score = score
+    return best_kind
+
+
+def infer_idea_tags(
+    title: str,
+    content: str,
+    existing_tags: list[str] | None = None,
+    protagonist_name: str | None = None,
+) -> list[str]:
+    tags = list(existing_tags or [])
+    text = f"{title} {content}"
+    if protagonist_name and protagonist_name in text:
+        tags.append(protagonist_name)
+
+    if 2 <= len(title.strip()) <= 12:
+        tags.append(title.strip())
+
+    location_like = re.findall(r"[\u4e00-\u9fff]{2,8}(?:港口|议会|议事厅|白塔|皇城|主城|学宫|宫|府|城|镇|村|山|海|岛|厅|院)", text)
+    role_like = re.findall(r"(?:师姐|师兄|师父|导师|议会|主角|反派|林舟)", text)
+    relation_like = re.findall(r"(?:背叛|结盟|决裂|和解|知情|真相|黑潮|泄密)", text)
+
+    for chunk in location_like + role_like + relation_like:
+        if chunk in STOP_TAGS:
+            continue
+        if any(fragment in chunk for fragment in NOISY_TAG_FRAGMENTS):
+            continue
+        tags.append(chunk)
+
+    for kind, keywords in IDEA_KIND_KEYWORDS.items():
+        if any(keyword.lower() in text.lower() for keyword in keywords):
+            tags.append(kind)
+
+    return _dedupe_keep_order(tags[:8])
+
+
+def infer_target_files(kind: str, title: str, content: str, explicit_targets: list[str] | None = None) -> list[str]:
+    targets = list(explicit_targets or [])
+    targets.extend(KIND_DEFAULT_TARGETS.get(kind, KIND_DEFAULT_TARGETS["misc"]))
+    text = f"{title} {content}"
+    if any(token in text for token in ["地点", "港口", "城", "塔", "山", "海"]):
+        targets.append("timeline/events.json")
+    if any(token in text for token in ["规则", "法则", "系统", "设定"]):
+        targets.append("canon/world-rules.md")
+    return _dedupe_keep_order(targets)
+
+
+def infer_suggested_domains(kind: str, target_files: list[str]) -> list[str]:
+    domains: list[str] = []
+    for target in target_files:
+        if target.startswith("timeline/"):
+            domains.append("timeline")
+        elif target.startswith("outline/"):
+            domains.append("outline")
+        elif target.startswith("canon/") or target.startswith("state/canon"):
+            domains.append("canon")
+    if kind == "relationship":
+        domains.extend(["canon", "outline"])
+    return _dedupe_keep_order(domains)
+
+
+def _parse_chinese_number(text: str) -> int | None:
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    if text == "十":
+        return 10
+    if "十" in text:
+        parts = text.split("十", 1)
+        left = CN_NUM_MAP.get(parts[0], 1 if parts[0] == "" else None)
+        right = CN_NUM_MAP.get(parts[1], 0 if parts[1] == "" else None)
+        if left is None or right is None:
+            return None
+        return left * 10 + right
+    total = 0
+    for char in text:
+        value = CN_NUM_MAP.get(char)
+        if value is None:
+            return None
+        total = total * 10 + value
+    return total or None
+
+
+def infer_chapter_hints(title: str, content: str) -> list[int]:
+    hints: list[int] = []
+    for match in re.findall(r"第\s*([0-9]{1,4}|[零一二两三四五六七八九十]{1,3})\s*章", f"{title} {content}"):
+        parsed = _parse_chinese_number(match)
+        if parsed is not None:
+            hints.append(parsed)
+    deduped = _dedupe_keep_order([str(item) for item in hints])
+    return [int(item) for item in deduped]
+
+
+def infer_location_candidates(title: str, content: str) -> list[str]:
+    text = f"{title} {content}"
+    suffixes = ("港口", "议事厅", "白塔", "皇城", "主城", "学宫", "宫", "府", "城", "镇", "村", "山", "海", "岛", "厅", "院")
+    suffix_group = "|".join(sorted((re.escape(suffix) for suffix in suffixes), key=len, reverse=True))
+    location_core = rf"[\u4e00-\u9fff]{{0,6}}(?:{suffix_group})"
+    patterns = (
+        rf"第\s*[0-9零一二两三四五六七八九十]+\s*章\s*({location_core})",
+        rf"(?:在|到|从|向|往|于)\s*({location_core})",
+        rf"({location_core})",
+    )
+    candidates: list[str] = []
+    for pattern in patterns:
+        for chunk in re.findall(pattern, text):
+            chunk = re.sub(r"^第[零一二两三四五六七八九十0-9]+章", "", chunk)
+            chunk = re.sub(r"^(在|到|从|向|往|于)", "", chunk)
+            if len(chunk) < 2:
+                continue
+            if any(fragment in chunk for fragment in NOISY_TAG_FRAGMENTS + ("意识到", "第一次", "知道", "确认")):
+                continue
+            candidates.append(chunk)
+    return _dedupe_keep_order(candidates[:5])
+
+
+def infer_character_mentions(title: str, content: str, protagonist_name: str | None = None) -> list[str]:
+    text = f"{title} {content}"
+    candidates: list[str] = []
+    if protagonist_name and protagonist_name in text:
+        candidates.append(protagonist_name)
+    candidates.extend(re.findall(r"(师姐|师兄|师父|导师|主角|反派|议长|议会)", text))
+    return _dedupe_keep_order(candidates[:6])
+
+
+def build_intake_draft(
+    *,
+    idea_id: str,
+    title: str,
+    content: str,
+    kind: str,
+    tags: list[str],
+    target_files: list[str],
+    suggested_domains: list[str],
+    protagonist_name: str | None,
+) -> dict[str, Any]:
+    chapter_hints = infer_chapter_hints(title, content)
+    location_candidates = infer_location_candidates(title, content)
+    character_mentions = infer_character_mentions(title, content, protagonist_name)
+    candidate_scene_title = title if kind in {"scene", "reveal", "event", "twist"} else None
+    candidate_event_label = title if kind in {"event", "reveal", "death", "twist"} else None
+
+    canon_updates: list[dict[str, Any]] = []
+    if kind in {"character", "relationship"}:
+        for name in character_mentions:
+            canon_updates.append(
+                {
+                    "type": "character-link",
+                    "label": name,
+                    "suggested_file": "state/canon-index.json",
+                }
+            )
+    if kind == "world":
+        canon_updates.append(
+            {
+                "type": "world-rule-note",
+                "label": title,
+                "suggested_file": "canon/world-rules.md",
+            }
+        )
+
+    timeline_candidates: list[dict[str, Any]] = []
+    if "timeline" in suggested_domains:
+        timeline_candidates.append(
+            {
+                "event_label": candidate_event_label or title,
+                "reading_chapter_hint": chapter_hints[0] if chapter_hints else None,
+                "location_candidates": location_candidates,
+                "participant_candidates": character_mentions,
+            }
+        )
+
+    outline_candidates: list[dict[str, Any]] = []
+    if "outline" in suggested_domains:
+        outline_candidates.append(
+            {
+                "scene_title": candidate_scene_title or title,
+                "chapter_hints": chapter_hints,
+                "pov_candidates": character_mentions[:2],
+                "target_outline_files": [path for path in target_files if path.startswith("outline/")],
+            }
+        )
+
+    open_questions: list[str] = []
+    if "timeline" in suggested_domains and not chapter_hints:
+        open_questions.append("这条想法落在哪一章或哪一个时间节点？")
+    if "timeline" in suggested_domains and not location_candidates:
+        open_questions.append("这条想法发生在什么地点？")
+    if "timeline" in suggested_domains and not character_mentions:
+        open_questions.append("这条想法涉及哪些角色参与？")
+    if "canon" in suggested_domains and kind in {"character", "relationship"} and not character_mentions:
+        open_questions.append("新人物或关系具体关联到哪些主要角色？")
+
+    confidence = "medium"
+    if chapter_hints or location_candidates or character_mentions:
+        confidence = "medium-high"
+    if len(open_questions) >= 3:
+        confidence = "low-medium"
+
+    return {
+        "idea_id": idea_id,
+        "title": title,
+        "kind": kind,
+        "tags": tags,
+        "target_files": target_files,
+        "suggested_domains": suggested_domains,
+        "chapter_hints": chapter_hints,
+        "location_candidates": location_candidates,
+        "character_mentions": character_mentions,
+        "canon_update_candidates": canon_updates,
+        "timeline_candidates": timeline_candidates,
+        "outline_candidates": outline_candidates,
+        "open_questions": open_questions,
+        "confidence": confidence,
+        "created_at": now_iso(),
+    }
+
+
+def _render_intake_draft_html(draft: dict[str, Any]) -> str:
+    questions = "\n".join(f"<li>{_safe(question)}</li>" for question in draft.get("open_questions", [])) or "<li>无</li>"
+    body = f"""
+    <header class="hero">
+      <div class="eyebrow">Idea Intake Draft</div>
+      <h1>{_safe(draft.get('title'))}</h1>
+      <p>idea id: <code>{_safe(draft.get('idea_id'))}</code> · inferred kind: <code>{_safe(draft.get('kind'))}</code></p>
+      <nav>
+        <a href="../index.html">总览</a>
+        <a href="../validation-report.html">校验报告</a>
+        <a href="../timeline.html">时间线</a>
+      </nav>
+    </header>
+    <section class="grid">
+      <article class="panel"><div class="eyebrow">Confidence</div><div class="metric">{_safe(draft.get('confidence'))}</div></article>
+      <article class="panel"><div class="eyebrow">Chapter Hints</div><div class="metric">{len(draft.get('chapter_hints', []))}</div><div class="submetric">{_safe(', '.join(str(item) for item in draft.get('chapter_hints', [])) or '无')}</div></article>
+      <article class="panel"><div class="eyebrow">Locations</div><div class="metric">{len(draft.get('location_candidates', []))}</div><div class="submetric">{_safe(', '.join(draft.get('location_candidates', [])) or '无')}</div></article>
+      <article class="panel"><div class="eyebrow">Characters</div><div class="metric">{len(draft.get('character_mentions', []))}</div><div class="submetric">{_safe(', '.join(draft.get('character_mentions', [])) or '无')}</div></article>
+    </section>
+    <section class="panel" style="margin-top: 24px;">
+      <h2>Suggested Domains</h2>
+      <p>{_safe(', '.join(draft.get('suggested_domains', [])) or '无')}</p>
+      <h2>Target Files</h2>
+      <p>{_safe(', '.join(draft.get('target_files', [])) or '无')}</p>
+    </section>
+    <section class="panel" style="margin-top: 24px;">
+      <h2>Open Questions</h2>
+      <ul class="clean">{questions}</ul>
+    </section>
+    """
+    return _html_page(f"{draft.get('title')} · Intake Draft", body)
+
+
 def ingest_idea(
     workspace: Path,
     title: str,
@@ -1004,20 +1436,40 @@ def ingest_idea(
     workspace = workspace.expanduser().resolve()
     idea_log_path = workspace / "state/idea-log.json"
     idea_log = read_json(idea_log_path, {"ideas": []})
-    tags = tags or []
-    target_files = target_files or []
+    status = collect_workspace_status(workspace)
+    normalized_kind = infer_idea_kind(title, content, kind)
+    tags = infer_idea_tags(title, content, tags, status.get("protagonist_name"))
+    target_files = infer_target_files(normalized_kind, title, content, target_files)
+    suggested_domains = infer_suggested_domains(normalized_kind, target_files)
 
     idea_id = _next_idea_id(idea_log.get("ideas", []))
     created_at = now_iso()
+    intake_draft = build_intake_draft(
+        idea_id=idea_id,
+        title=title,
+        content=content,
+        kind=normalized_kind,
+        tags=tags,
+        target_files=target_files,
+        suggested_domains=suggested_domains,
+        protagonist_name=status.get("protagonist_name"),
+    )
+    intake_draft_path = workspace / "state/intake-drafts" / f"{idea_id}.json"
+    intake_draft_view_path = workspace / "views/intake-drafts" / f"{idea_id}.html"
+    write_json(intake_draft_path, intake_draft)
+    write_text(intake_draft_view_path, _render_intake_draft_html(intake_draft))
     idea = {
         "id": idea_id,
         "title": title,
-        "kind": kind,
+        "kind": normalized_kind,
         "status": "pending",
         "source": source,
         "content": content,
         "tags": tags,
         "target_files": target_files,
+        "suggested_domains": suggested_domains,
+        "intake_draft_path": str(intake_draft_path.resolve()),
+        "intake_draft_view_path": str(intake_draft_view_path.resolve()),
         "created_at": created_at,
         "updated_at": created_at,
         "resolution_note": "",
@@ -1030,16 +1482,30 @@ def ingest_idea(
             f"# {title}",
             "",
             f"- id: `{idea_id}`",
-            f"- kind: `{kind}`",
+            f"- kind: `{normalized_kind}`",
             "- status: `pending`",
             f"- source: `{source}`",
             f"- created_at: `{created_at}`",
             f"- tags: {', '.join(tags) if tags else '无'}",
             f"- target_files: {', '.join(target_files) if target_files else '待判断'}",
+            f"- suggested_domains: {', '.join(suggested_domains) if suggested_domains else '待判断'}",
+            f"- intake_draft: `{intake_draft_path}`",
+            f"- intake_draft_view: `{intake_draft_view_path}`",
             "",
             "## 原始想法",
             "",
             content.strip(),
+            "",
+            "## Intake 结果",
+            "",
+            f"- inferred kind: `{normalized_kind}`",
+            f"- inferred tags: {', '.join(tags) if tags else '无'}",
+            f"- inferred target files: {', '.join(target_files) if target_files else '无'}",
+            f"- inferred domains: {', '.join(suggested_domains) if suggested_domains else '无'}",
+            f"- chapter hints: {', '.join(str(item) for item in intake_draft.get('chapter_hints', [])) if intake_draft.get('chapter_hints') else '无'}",
+            f"- location candidates: {', '.join(intake_draft.get('location_candidates', [])) if intake_draft.get('location_candidates') else '无'}",
+            f"- character mentions: {', '.join(intake_draft.get('character_mentions', [])) if intake_draft.get('character_mentions') else '无'}",
+            f"- confidence: `{intake_draft.get('confidence')}`",
             "",
             "## 初步影响面",
             "",

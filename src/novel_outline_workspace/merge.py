@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .consistency import consistency_report_needs_refresh, load_consistency_report
 from .workspace import (
     _html_page,
     _safe,
@@ -93,6 +94,86 @@ def _unresolved_questions(domains: list[str]) -> list[str]:
     return questions
 
 
+def _consistency_gate(workspace: Path, idea: dict[str, Any]) -> dict[str, Any]:
+    report = load_consistency_report(workspace, str(idea.get("id")))
+    if report is None:
+        return {
+            "status": "missing",
+            "can_plan_merge": False,
+            "can_apply_merge": False,
+            "summary": "这条 idea 还没有 consistency report。",
+            "report_path": None,
+            "view_path": None,
+            "blockers": ["先运行 idea-level consistency check，再决定 merge。"],
+            "warnings": [],
+        }
+    if consistency_report_needs_refresh(workspace, idea):
+        return {
+            "status": "stale",
+            "can_plan_merge": False,
+            "can_apply_merge": False,
+            "summary": "已有 consistency report，但它落后于当前 idea 内容，需要重跑。",
+            "report_path": report.get("report_path"),
+            "view_path": report.get("view_path"),
+            "blockers": ["当前 consistency report 已过期，需要重跑后再做 merge。"],
+            "warnings": [],
+        }
+
+    blockers = [
+        issue.get("message")
+        for issue in report.get("issues", [])
+        if issue.get("level") == "error" or str(issue.get("code", "")).endswith("-conflict")
+    ]
+    warnings = [
+        issue.get("message")
+        for issue in report.get("issues", [])
+        if issue.get("level") == "warning" and not str(issue.get("code", "")).endswith("-conflict")
+    ]
+    if blockers:
+        return {
+            "status": "blocked",
+            "can_plan_merge": True,
+            "can_apply_merge": False,
+            "summary": "consistency report 已生成，但仍有 conflicts / errors，当前不应直接 apply merge。",
+            "report_path": report.get("report_path"),
+            "view_path": report.get("view_path"),
+            "blockers": blockers,
+            "warnings": warnings,
+        }
+    if warnings:
+        return {
+            "status": "warning",
+            "can_plan_merge": True,
+            "can_apply_merge": True,
+            "summary": "consistency report 没有硬 conflicts，但仍有 warning，merge 前需要人工确认。",
+            "report_path": report.get("report_path"),
+            "view_path": report.get("view_path"),
+            "blockers": [],
+            "warnings": warnings,
+        }
+    return {
+        "status": "clear",
+        "can_plan_merge": True,
+        "can_apply_merge": True,
+        "summary": "consistency gate 已通过，可以进入 merge planning / apply。",
+        "report_path": report.get("report_path"),
+        "view_path": report.get("view_path"),
+        "blockers": [],
+        "warnings": [],
+    }
+
+
+def _load_intake_draft_summary(workspace: Path, idea_id: str) -> dict[str, Any]:
+    draft = read_json(workspace / "state/intake-drafts" / f"{idea_id}.json", {})
+    return {
+        "chapter_hints": draft.get("chapter_hints", []),
+        "location_candidates": draft.get("location_candidates", []),
+        "character_mentions": draft.get("character_mentions", []),
+        "suggested_domains": draft.get("suggested_domains", []),
+        "confidence": draft.get("confidence"),
+    }
+
+
 def _render_merge_plan_html(plan: dict[str, Any]) -> str:
     action_rows = "\n".join(
         "<tr>"
@@ -104,6 +185,9 @@ def _render_merge_plan_html(plan: dict[str, Any]) -> str:
         for action in plan.get("proposed_actions", [])
     )
     question_items = "\n".join(f"<li>{_safe(question)}</li>" for question in plan.get("unresolved_questions", []))
+    blocker_items = "\n".join(f"<li>{_safe(item)}</li>" for item in plan.get("consistency_gate", {}).get("blockers", []))
+    warning_items = "\n".join(f"<li>{_safe(item)}</li>" for item in plan.get("consistency_gate", {}).get("warnings", []))
+    intake = plan.get("intake_summary", {})
     body = f"""
     <header class="hero">
       <div class="eyebrow">Merge Plan</div>
@@ -118,6 +202,23 @@ def _render_merge_plan_html(plan: dict[str, Any]) -> str:
     <section class="panel" style="margin-top: 24px;">
       <h2>原始想法</h2>
       <p>{_safe(plan.get('content'))}</p>
+    </section>
+    <section class="panel" style="margin-top: 24px;">
+      <h2>Consistency Gate</h2>
+      <p>status: <code>{_safe(plan.get('consistency_gate', {}).get('status'))}</code></p>
+      <p>{_safe(plan.get('consistency_gate', {}).get('summary'))}</p>
+      <p>can apply merge: <code>{_safe(plan.get('consistency_gate', {}).get('can_apply_merge'))}</code></p>
+      <h3>Blockers</h3>
+      <ul class="clean">{blocker_items or '<li>无</li>'}</ul>
+      <h3>Warnings</h3>
+      <ul class="clean">{warning_items or '<li>无</li>'}</ul>
+    </section>
+    <section class="panel" style="margin-top: 24px;">
+      <h2>Intake Hints</h2>
+      <p>chapter hints: <code>{_safe(', '.join(str(item) for item in intake.get('chapter_hints', [])) or '无')}</code></p>
+      <p>location candidates: <code>{_safe(', '.join(intake.get('location_candidates', [])) or '无')}</code></p>
+      <p>character mentions: <code>{_safe(', '.join(intake.get('character_mentions', [])) or '无')}</code></p>
+      <p>confidence: <code>{_safe(intake.get('confidence') or 'unknown')}</code></p>
     </section>
     <section class="panel" style="margin-top: 24px;">
       <h2>Proposed Actions</h2>
@@ -139,6 +240,29 @@ def plan_idea_merge(workspace: Path, idea_id: str) -> dict[str, Any]:
     status = collect_workspace_status(workspace)
     _, idea, _ = _find_idea(workspace, idea_id)
     domains = _infer_domains(idea, status.get("protagonist_name"))
+    gate = _consistency_gate(workspace, idea)
+    intake_summary = _load_intake_draft_summary(workspace, idea_id)
+    proposed_actions: list[dict[str, Any]] = []
+    if gate["status"] in {"missing", "stale"}:
+        proposed_actions.append(
+            {
+                "domain": "gate",
+                "action": "先运行或重跑 consistency check。",
+                "target_files": ["state/consistency-checks", "views/consistency-checks"],
+                "reason": gate["summary"],
+                "confidence": "high",
+            }
+        )
+    elif gate["status"] == "blocked":
+        proposed_actions.append(
+            {
+                "domain": "gate",
+                "action": "先处理 consistency blockers，再决定如何 merge。",
+                "target_files": ["state/consistency-checks", "views/consistency-checks"],
+                "reason": gate["summary"],
+                "confidence": "high",
+            }
+        )
     plan = {
         "idea_id": idea_id,
         "title": idea.get("title"),
@@ -146,7 +270,9 @@ def plan_idea_merge(workspace: Path, idea_id: str) -> dict[str, Any]:
         "status": idea.get("status"),
         "content": idea.get("content"),
         "suggested_domains": domains,
-        "proposed_actions": [
+        "consistency_gate": gate,
+        "intake_summary": intake_summary,
+        "proposed_actions": proposed_actions + [
             {
                 "domain": domain,
                 "action": f"把该想法并入 {domain} 层。",
@@ -156,7 +282,7 @@ def plan_idea_merge(workspace: Path, idea_id: str) -> dict[str, Any]:
             }
             for domain in domains
         ],
-        "unresolved_questions": _unresolved_questions(domains),
+        "unresolved_questions": _unresolved_questions(domains) + gate["blockers"] + gate["warnings"],
         "created_at": now_iso(),
     }
     plan_path = workspace / "state/merge-plans" / f"{idea_id}.json"
@@ -305,6 +431,7 @@ def apply_idea_merge(
     *,
     idea_id: str,
     resolution_note: str,
+    override_consistency_gate: bool = False,
     character_id: str | None = None,
     character_name: str | None = None,
     character_role: str = "support",
@@ -328,6 +455,9 @@ def apply_idea_merge(
 ) -> dict[str, Any]:
     workspace = workspace.expanduser().resolve()
     idea_log, idea, idea_index = _find_idea(workspace, idea_id)
+    gate = _consistency_gate(workspace, idea)
+    if not gate["can_apply_merge"] and not override_consistency_gate:
+        raise ValueError(f"consistency gate blocked for `{idea_id}`: {gate['summary']}")
     updated_files: set[str] = set()
 
     if character_name:
@@ -407,6 +537,9 @@ def apply_idea_merge(
     idea["resolution_note"] = resolution_note
     idea["updated_at"] = now_iso()
     idea["planned_merge_path"] = str((workspace / "state/merge-plans" / f"{idea_id}.json").resolve())
+    idea["consistency_report_path"] = gate.get("report_path")
+    idea["consistency_gate_status"] = gate.get("status")
+    idea["merge_gate_override"] = bool(override_consistency_gate)
     idea_log["ideas"][idea_index] = idea
     write_json(workspace / "state/idea-log.json", idea_log)
 

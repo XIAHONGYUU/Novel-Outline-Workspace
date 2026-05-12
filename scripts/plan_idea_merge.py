@@ -24,6 +24,7 @@ def main() -> int:
         print(json.dumps(plan, ensure_ascii=False, indent=2))
     else:
         print(f"Planned merge: {plan['idea_id']}")
+        print(f"Consistency gate: {plan['consistency_gate']['status']}")
         print(f"Plan JSON: {plan['plan_path']}")
         print(f"Plan View: {plan['view_path']}")
     return 0

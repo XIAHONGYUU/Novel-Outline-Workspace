@@ -17,11 +17,11 @@ def main() -> int:
     parser.add_argument("--workspace", required=True, help="Workspace directory.")
     parser.add_argument(
         "--action",
-        choices=["auto", "validate", "render", "plan-merge"],
+        choices=["auto", "validate", "render", "check-consistency", "plan-merge"],
         default="auto",
         help="Action to recommend or execute.",
     )
-    parser.add_argument("--idea-id", help="Idea id for plan-merge.")
+    parser.add_argument("--idea-id", help="Idea id for check-consistency or plan-merge.")
     parser.add_argument("--execute", action="store_true", help="Execute the selected action.")
     parser.add_argument("--json", action="store_true", help="Print JSON result.")
     args = parser.parse_args()

@@ -37,6 +37,7 @@ def main() -> int:
     parser.add_argument("--scene-event-id", action="append", default=[], help="Repeatable scene event id.")
     parser.add_argument("--canon-note", help="Extra canon note written into markdown.")
     parser.add_argument("--outline-note", help="Extra outline note written into markdown.")
+    parser.add_argument("--override-consistency-gate", action="store_true", help="Apply merge even if consistency gate is blocked.")
     parser.add_argument("--json", action="store_true", help="Print JSON result.")
     args = parser.parse_args()
 
@@ -44,6 +45,7 @@ def main() -> int:
         Path(args.workspace),
         idea_id=args.idea_id,
         resolution_note=args.resolution_note,
+        override_consistency_gate=args.override_consistency_gate,
         character_id=args.character_id,
         character_name=args.character_name,
         character_role=args.character_role,
