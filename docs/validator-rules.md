@@ -58,6 +58,17 @@
 
 否则视为工作流不完整。
 
+## 与 consistency-check 的边界
+
+`validate_workspace` 负责整库硬检查。
+
+`novel-consistency-check` 负责单条 idea 在 merge 前的独立冲突检查。
+
+两者不是替代关系：
+
+- validator 更偏“正式数据是否已经坏掉”
+- consistency-check 更偏“这条新 idea 现在能不能安全并入”
+
 ## 当前未实现
 
 - 谁知道什么信息以及何时知道

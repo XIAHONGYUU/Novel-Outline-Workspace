@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .consistency import check_idea_consistency, consistency_report_needs_refresh, load_consistency_report
 from .merge import pending_ideas, plan_idea_merge
 from .workspace import collect_workspace_status, render_workspace_views, validate_workspace
 
@@ -21,11 +22,29 @@ def choose_next_action(workspace: Path) -> dict[str, Any]:
             "status": status,
         }
     if pending:
+        target_idea = pending[0]
+        if consistency_report_needs_refresh(workspace, target_idea):
+            return {
+                "workspace": str(workspace),
+                "recommended_action": "check-consistency",
+                "reason": "当前存在 pending idea，且还没有最新的 consistency check，先跑 idea-level 冲突检查。",
+                "idea_id": target_idea.get("id"),
+                "status": status,
+            }
+        report = load_consistency_report(workspace, str(target_idea.get("id"))) or {}
+        if report.get("error_count", 0) > 0 or report.get("conflict_count", 0) > 0:
+            return {
+                "workspace": str(workspace),
+                "recommended_action": "check-consistency",
+                "reason": "当前最早的 pending idea 存在 consistency 冲突，应该先处理这条 idea 的报告。",
+                "idea_id": target_idea.get("id"),
+                "status": status,
+            }
         return {
             "workspace": str(workspace),
             "recommended_action": "plan-merge",
-            "reason": "当前存在 pending idea，优先为最早一条想法生成 merge plan。",
-            "idea_id": pending[0].get("id"),
+            "reason": "当前最早一条 pending idea 已通过基础 consistency gate，可以继续生成 merge plan。",
+            "idea_id": target_idea.get("id"),
             "status": status,
         }
     if status.get("entity_counts", {}).get("events", 0) == 0 or status.get("entity_counts", {}).get("scenes", 0) == 0:
@@ -80,6 +99,14 @@ def run_outline_workspace_pipeline(
         outputs = render_workspace_views(workspace, status=collect_workspace_status(workspace))
         result["executed"] = True
         result["rendered_views"] = outputs
+        return result
+
+    if selected_action == "check-consistency":
+        if not target_idea_id:
+            raise ValueError("check-consistency requires a pending idea.")
+        report = check_idea_consistency(workspace, target_idea_id)
+        result["executed"] = True
+        result["consistency_report"] = report
         return result
 
     if selected_action == "plan-merge":

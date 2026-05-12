@@ -23,8 +23,42 @@
 
 - 建议影响的 domain
 - 建议写入的目标文件
+- 当前 `consistency_gate`
+- intake draft 摘要
 - 还缺哪些结构化信息
 - 对应的 HTML 计划页路径
+
+## `state/intake-drafts/<idea-id>.json`
+
+记录一条 raw idea 在 intake 阶段推断出的结构化草案。
+
+建议字段包括：
+
+- `kind`
+- `suggested_domains`
+- `chapter_hints`
+- `location_candidates`
+- `character_mentions`
+- `timeline_candidates`
+- `outline_candidates`
+- `canon_update_candidates`
+- `open_questions`
+- `confidence`
+
+## `state/consistency-checks/<idea-id>.json`
+
+记录一条 idea 在 merge 前做的独立 consistency 检查结果。
+
+建议字段包括：
+
+- `idea_id`
+- `ok`
+- `conflict_count`
+- `error_count`
+- `warning_count`
+- `issues`
+- `draft_path`
+- `checked_at`
 
 ## `state/idea-log.json`
 
@@ -44,7 +78,10 @@
   "target_files": ["canon/characters.md", "outline/master-outline.md"],
   "created_at": "2026-05-11T00:00:00Z",
   "updated_at": "2026-05-11T00:00:00Z",
-  "resolution_note": ""
+  "resolution_note": "",
+  "consistency_report_path": "/abs/path/to/state/consistency-checks/idea-20260511-001.json",
+  "consistency_gate_status": "clear",
+  "merge_gate_override": false
 }
 ```
 
@@ -150,5 +187,9 @@
 - `views/timeline.html`
 - `views/merge-plans/<idea-id>.html`
   时间线页
+- `views/intake-drafts/<idea-id>.html`
+  intake draft 预览页
+- `views/consistency-checks/<idea-id>.html`
+  单条 idea 的 consistency 检查页
 
 这些页面来自 JSON 真相源，不应该反向手工编辑。

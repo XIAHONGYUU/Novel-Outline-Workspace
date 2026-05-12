@@ -5,11 +5,13 @@ from .workspace import (
     render_workspace_views,
     validate_workspace,
 )
+from .consistency import check_idea_consistency
 from .merge import apply_idea_merge, pending_ideas, plan_idea_merge
 from .orchestrator import choose_next_action, run_outline_workspace_pipeline
 
 __all__ = [
     "apply_idea_merge",
+    "check_idea_consistency",
     "collect_workspace_status",
     "choose_next_action",
     "init_workspace",

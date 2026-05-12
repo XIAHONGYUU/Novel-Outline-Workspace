@@ -30,6 +30,27 @@
 这还不是“自动把所有想法无损融合进全文”的终版代理。
 它是一个可靠的基础层。
 
+## 当前状态
+
+到 `2026-05-13` 为止，主链路已经推进到：
+
+`ingest -> check-consistency -> plan-merge -> apply-merge -> validate`
+
+当前已具备：
+
+- `novel-idea-intake`
+  能生成 intake draft 和 HTML 预览
+- `novel-consistency-check`
+  能生成 idea-level consistency report，并已接入 pipeline
+- gate-aware merge
+  `plan_idea_merge` 和 `apply_idea_merge` 都会显式读取 consistency gate
+
+下一步重点不再是补“有没有入口”，而是增强：
+
+- `knowledge-state` 检查
+- `novel-timeline-merge`
+- timeline / outline / canon 的联动质量
+
 ## 核心结构
 
 ```text
@@ -87,6 +108,15 @@ python3 scripts/ingest_idea.py \
 python3 scripts/validate_workspace.py --workspace ./demo-workspace --json
 ```
 
+对单条 idea 运行 consistency check：
+
+```bash
+python3 scripts/check_idea_consistency.py \
+  --workspace ./demo-workspace \
+  --idea-id idea-20260511-001 \
+  --json
+```
+
 重建 HTML 展示页：
 
 ```bash
@@ -111,10 +141,30 @@ python3 scripts/apply_idea_merge.py \
   --resolution-note "把揭露点前移到第七章，并同步更新时间线与场景。"
 ```
 
+默认情况下，`apply_idea_merge.py` 会要求这条 idea 先通过或至少完成最新的 `consistency check`。
+如果你已经人工确认要强行并入，可以显式加：
+
+```bash
+python3 scripts/apply_idea_merge.py \
+  --workspace ./demo-workspace \
+  --idea-id idea-20260511-001 \
+  --resolution-note "人工确认后仍决定并入。" \
+  --override-consistency-gate
+```
+
 让 orchestrator 判断下一步：
 
 ```bash
 python3 scripts/run_outline_workspace_pipeline.py --workspace ./demo-workspace --json
+```
+
+直接执行 orchestrator 推荐动作：
+
+```bash
+python3 scripts/run_outline_workspace_pipeline.py \
+  --workspace ./demo-workspace \
+  --execute \
+  --json
 ```
 
 ## 当前原则
@@ -124,11 +174,19 @@ python3 scripts/run_outline_workspace_pipeline.py --workspace ./demo-workspace -
 - HTML 是主要生成产物和展示层
 - `inbox` 允许混乱，`canon / outline / timeline` 不允许混乱
 - 先做硬校验，再逐步加语义级 merge
+- 推荐主流程：`ingest -> check-consistency -> plan-merge -> apply-merge -> validate`
 
 ## 文档
 
 - [WORKFLOW.md](/home/zuoky/project2/WORKFLOW.md:1)
+- [PROJECT_STATUS.md](/home/zuoky/project2/PROJECT_STATUS.md:1)
+- [NEXT_ACTIONS.md](/home/zuoky/project2/NEXT_ACTIONS.md:1)
+- [DECISIONS.md](/home/zuoky/project2/DECISIONS.md:1)
+- [AGENTS.md](/home/zuoky/project2/AGENTS.md:1)
 - [docs/repository-map.md](/home/zuoky/project2/docs/repository-map.md:1)
 - [docs/data-model.md](/home/zuoky/project2/docs/data-model.md:1)
 - [docs/validator-rules.md](/home/zuoky/project2/docs/validator-rules.md:1)
+- [docs/skill-catalog.md](/home/zuoky/project2/docs/skill-catalog.md:1)
+- [novel-idea-intake-skill/SKILL.md](/home/zuoky/project2/novel-idea-intake-skill/SKILL.md:1)
+- [novel-consistency-check-skill/SKILL.md](/home/zuoky/project2/novel-consistency-check-skill/SKILL.md:1)
 - [novel-outline-orchestrator-skill/SKILL.md](/home/zuoky/project2/novel-outline-orchestrator-skill/SKILL.md:1)

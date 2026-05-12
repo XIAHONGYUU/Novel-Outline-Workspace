@@ -83,12 +83,16 @@ workspace-template/
 │   └── README.md
 ├── state/
 │   ├── canon-index.json
+│   ├── consistency-checks/
 │   ├── idea-log.json
+│   ├── intake-drafts/
 │   ├── merge-plans/
 │   └── workspace-status.json
 ├── timeline/
 │   └── events.json
 └── views/
     ├── README.md
+    ├── consistency-checks/
+    ├── intake-drafts/
     └── merge-plans/
 ```
