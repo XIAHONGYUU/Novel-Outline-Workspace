@@ -167,3 +167,125 @@
 - 否则后续 timeline merge 会重新发明一套并行输入
 - 已有 gate-aware merge 是后续 skill 的稳定前提
 - 先把输入层收敛，后续 `canon-manager` 和 `arc-structure-manager` 更容易接入
+
+---
+
+## 2026-05-13
+
+### 决策：consistency report 开始输出结构化 `knowledge_claims` 和 `patch_suggestions`
+
+当前状态：
+
+- idea-level consistency check 已能识别一部分 `knowledge-state conflict`
+- 下一阶段需要让 `novel-timeline-merge` 直接消费 consistency 结果
+
+因此不再只输出面向人看的 issue 文本，还要在 report 里补：
+
+- `knowledge_claims`
+- `patch_suggestions`
+- `issues[].details`
+
+原因：
+
+- 否则后续 merge 仍要从长句描述里反向猜结构化输入
+- 先把 consistency 输出层机器化，timeline merge 更容易落地
+- 这能保持 `check-consistency -> plan-merge -> apply-merge` 的闭环连续性
+
+---
+
+## 2026-05-13
+
+### 决策：`plan_idea_merge` 先输出 `timeline_merge_inputs`，`apply_idea_merge` 直接按 `merge_input_id` 消费
+
+当前状态：
+
+- consistency report 已能输出 `knowledge_claims` 和 `patch_suggestions`
+- merge plan 之前仍偏“报告”，不够接近执行层
+
+因此先不急着拆独立脚本，而是在现有 `plan/apply` 之间加一层结构化输入：
+
+- `state/merge-plans/<idea-id>.json` 增加 `timeline_merge_inputs`
+- `apply_idea_merge` 支持 `merge_input_id`
+
+原因：
+
+- 这能最短路径打通从 report 到执行的闭环
+- 不会绕开现有 gate-aware merge
+- 等输入层稳定后，再拆更完整的 `novel-timeline-merge` 会更稳
+
+---
+
+## 2026-05-13
+
+### 决策：relationship 进入 `state/canon-index.json` 的正式机器源
+
+当前状态：
+
+- relationship-history / first-meeting 已经能在 consistency-check 中稳定产出 issue
+- 如果关系只写 Markdown note，后续 merge 和 validator 都无法稳定消费
+
+因此本轮增加最小关系结构：
+
+- `state/canon-index.json -> relationships[]`
+
+第一层只固定：
+
+- `id`
+- `character_ids`
+- `state`
+- `reading_chapter`
+- `event_id`
+- `notes`
+
+原因：
+
+- 先把关系事实从纯文本提到机器真相源
+- 让 relationship merge input 有稳定落点
+- 后续再扩 richer graph，不必推翻当前接口
+
+---
+
+## 2026-05-13
+
+### 决策：relationship-history 先采用“重复状态去重 + 中间状态转移豁免”
+
+当前状态：
+
+- `relationships[]` 已进入 `state/canon-index.json`
+- relationship merge input 已能写入 canon
+
+如果没有去重与豁免，常见的“先结盟、后决裂、再结盟”会被错误地持续判成重复冲突。
+
+因此本轮规则固定为：
+
+- 同一 pair 在没有中间状态转移的前提下，重复同状态视为冲突
+- 如果两次同状态之间存在明确不同状态，则后一次同状态允许豁免
+- merge input 在命中已有关系节点时优先复用旧节点 id，而不是盲目追加
+
+原因：
+
+- 先把最常见的关系图谱噪音压下去
+- 保持 merge 输入尽量更新已有节点，减少重复关系记录
+- 后续再补更细的豁免边界时，不需要推翻当前模型
+
+---
+
+## 2026-05-13
+
+### 决策：`world-rule conflict` 先提供一条“事件 + cutoff 对齐”的结构化 resolution path
+
+当前状态：
+
+- `world-rule conflict` 已能稳定产出 issue 和 `patch_suggestions`
+- 如果只保留人工 override，gate-aware merge 会在这类 case 上断开
+
+因此当前先固定一条可执行策略：
+
+- 创建或更新 idea 对应事件 / 场景
+- 同时把 `constraints` 中对应 rule 的 `applies_until_event_id` 对齐到该事件
+
+原因：
+
+- 这条路径能最短闭环接上现有 `plan/apply`
+- 相比直接 override，更接近结构化修复
+- 后续可以在不推翻接口的前提下继续增加“延后事件”或“改单条 rule 说明”等分支

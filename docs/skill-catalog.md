@@ -138,16 +138,23 @@ MVP 已落地：
 第一版当前覆盖：
 
 - matching event / scene 的 chapter drift
+- claim-level `knowledge-state` drift
 - matching event 的 location drift
 - 显式“初见 / 第一次见面”想法的 first-meeting conflict
 - relationship-history conflict
 - hard-canon world-rule conflict
 - intake draft completeness warnings
 
+本轮已补上：
+
+- 从 idea 中提取 `谁在第几章知道 / 意识到什么` 的结构化 `knowledge_claims`
+- report 级 `patch_suggestions`，供后续 merge 直接消费
+- relationship-history 的图谱级去重与转移豁免基础版
+
 仍待扩展：
 
-- deeper knowledge-state reasoning
-- 更稳定的 patch-level 建议处理方式
+- deeper knowledge-state graph reasoning
+- 更细的 relationship-state 豁免边界
 - 和 merge plan 的更强联动
 
 #### 为什么重要
@@ -197,6 +204,25 @@ MVP 已落地：
 #### 作用
 
 把一条新剧情插入时间轴，并联动更新 `timeline / outline / canon`。
+
+#### 当前实现状态
+
+第一层输入已落地：
+
+- `plan_idea_merge` 开始输出 `timeline_merge_inputs`
+- `apply_idea_merge` 可按 `merge_input_id` 直接消费
+- 当前优先覆盖：
+  - 新建 event / scene 输入
+  - 基于 `timeline-order / knowledge-state / location` issue 的已有记录更新
+  - relationship idea 的 canon relationship 输入
+  - 基于 `relationship-history / first-meeting` issue 的 canon relationship 更新
+
+仍待补强：
+
+- 更完整的 canon 联动
+- world-rule 类输入
+- 更细的 issue-specific strategy
+- 更细的 relationship graph 豁免边界
 
 #### 为什么重要
 

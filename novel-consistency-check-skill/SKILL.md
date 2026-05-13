@@ -24,6 +24,7 @@ Current first version focuses on deterministic checks that can be supported by t
 It currently checks:
 
 - chapter placement drift for matching event / scene titles
+- claim-level knowledge-state drift for "谁在何时知道 / 意识到什么"
 - location continuity drift for matching events
 - first-meeting conflicts when an idea explicitly claims a first meeting but earlier shared appearances already exist
 - relationship-history drift for repeated alliance / acquaintance states
@@ -49,6 +50,11 @@ The command writes:
 
 - `state/consistency-checks/<idea-id>.json`
 - `views/consistency-checks/<idea-id>.html`
+
+The JSON report may also include:
+
+- `knowledge_claims`
+- `patch_suggestions`
 
 ## Operating Rules
 

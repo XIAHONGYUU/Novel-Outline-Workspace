@@ -44,6 +44,12 @@
   能生成 idea-level consistency report，并已接入 pipeline
 - gate-aware merge
   `plan_idea_merge` 和 `apply_idea_merge` 都会显式读取 consistency gate
+- timeline merge input layer
+  `plan_idea_merge` 已开始输出结构化 `timeline_merge_inputs`，`apply_idea_merge` 可直接按 `merge_input_id` 消费
+- canon relationship layer
+  `state/canon-index.json` 已开始承载结构化 `relationships`，关系类 merge input 可直接写入
+- world-rule resolution layer
+  `plan_idea_merge` 已可为 `world-rule conflict` 生成规则截止点对齐输入，`apply_idea_merge` 可直接执行
 
 下一步重点不再是补“有没有入口”，而是增强：
 
@@ -130,6 +136,26 @@ python3 scripts/plan_idea_merge.py \
   --workspace ./demo-workspace \
   --idea-id idea-20260511-001 \
   --json
+```
+
+如果 plan 里已经有可直接执行的 `timeline_merge_inputs`，可以按输入 id 应用：
+
+```bash
+python3 scripts/apply_idea_merge.py \
+  --workspace ./demo-workspace \
+  --idea-id idea-20260511-001 \
+  --merge-input-id timeline-merge-001 \
+  --resolution-note "按 merge input 并入第七章揭露节点。"
+```
+
+对于 `world-rule conflict`，plan 也可能生成“更新事件并同步 rule cutoff”的结构化输入：
+
+```bash
+python3 scripts/apply_idea_merge.py \
+  --workspace ./demo-workspace \
+  --idea-id idea-20260511-001 \
+  --merge-input-id timeline-merge-rule-001 \
+  --resolution-note "把揭露事件与硬约束截止点对齐。"
 ```
 
 应用一条结构化 merge：

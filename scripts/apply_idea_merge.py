@@ -17,6 +17,18 @@ def main() -> int:
     parser.add_argument("--workspace", required=True, help="Workspace directory.")
     parser.add_argument("--idea-id", required=True, help="Idea id to apply.")
     parser.add_argument("--resolution-note", required=True, help="How this idea was resolved.")
+    parser.add_argument("--merge-input-id", help="Structured merge input id from state/merge-plans/<idea-id>.json.")
+    parser.add_argument("--rule-id", help="Constraint rule id to add or update.")
+    parser.add_argument("--rule-type", default="hard-canon", help="Constraint rule type.")
+    parser.add_argument("--rule-label", help="Constraint rule label.")
+    parser.add_argument("--rule-applies-until-event-id", help="Constraint cutoff event id.")
+    parser.add_argument("--rule-notes", help="Constraint rule notes.")
+    parser.add_argument("--relationship-id", help="Relationship id to add or update.")
+    parser.add_argument("--relationship-character-id", action="append", default=[], help="Repeatable relationship character id.")
+    parser.add_argument("--relationship-state", help="Relationship state key such as allied / met / acquainted.")
+    parser.add_argument("--relationship-reading-chapter", type=int, help="Relationship beat chapter number.")
+    parser.add_argument("--relationship-event-id", help="Linked event id for the relationship beat.")
+    parser.add_argument("--relationship-notes", help="Extra relationship note stored in canon index.")
     parser.add_argument("--character-id", help="Character id to add or update.")
     parser.add_argument("--character-name", help="Character name to add or update.")
     parser.add_argument("--character-role", default="support", help="Character role.")
@@ -45,7 +57,19 @@ def main() -> int:
         Path(args.workspace),
         idea_id=args.idea_id,
         resolution_note=args.resolution_note,
+        merge_input_id=args.merge_input_id,
         override_consistency_gate=args.override_consistency_gate,
+        rule_id=args.rule_id,
+        rule_type=args.rule_type,
+        rule_label=args.rule_label,
+        rule_applies_until_event_id=args.rule_applies_until_event_id,
+        rule_notes=args.rule_notes,
+        relationship_id=args.relationship_id,
+        relationship_character_ids=args.relationship_character_id,
+        relationship_state=args.relationship_state,
+        relationship_reading_chapter=args.relationship_reading_chapter,
+        relationship_event_id=args.relationship_event_id,
+        relationship_notes=args.relationship_notes,
         character_id=args.character_id,
         character_name=args.character_name,
         character_role=args.character_role,
