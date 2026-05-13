@@ -6,14 +6,14 @@
 
 ### P0
 
-1. 扩展 `novel-consistency-check`
-   目标：在现有可用版上补更强的 `knowledge-state` 和 patch 建议。
+1. 扩展 `novel-timeline-merge`
+   目标：在已落地的 `timeline_merge_inputs` 基础上，补更多 issue-specific 执行策略，优先扩展 `world-rule` 的多策略分支。
 
-2. 开始实现 `novel-timeline-merge`
-   目标：消费 intake draft、consistency gate 和 merge plan，稳定地更新 timeline / outline / canon。
+2. 扩展 `timeline_merge_inputs`
+   目标：覆盖 `world-rule` 的“延后事件 / 对齐 cutoff / 修改规则说明”等更多 resolution path。
 
-3. 给 merge plan 产出更可执行的结构化 merge inputs
-   目标：减少从“报告”到“真正写入”的人工跳跃。
+3. 继续扩展 `novel-consistency-check`
+   目标：把当前 claim-based `knowledge-state` 和 relationship-history 推进到更稳定的图谱推理与豁免边界。
 
 ### P1
 
@@ -28,21 +28,23 @@
 
 ## 建议执行顺序
 
-1. 先扩展 `novel-consistency-check`
-2. 再做 `novel-timeline-merge`
-3. 然后把 merge plan 变成更接近执行输入的产物
+1. 先扩展 `novel-timeline-merge`
+2. 再继续补 relationship / knowledge-state 图谱边界
+3. 然后继续覆盖 world-rule / canon merge 输入
 
 ## 下一次开工时的最小切入点
 
 如果只做一个任务，优先做这个：
 
-`先把 consistency gate 产物和 merge plan 摘要转成更可执行的 timeline merge 输入。`
+`先把 world-rule 的单一路径 resolution input 扩成多策略输入。`
 
 下一批优先补的冲突：
 
-- `knowledge-state conflict`
 - 更细的 `timeline-order conflict`
-- 结构化 patch 建议
+- knowledge-state 的图谱级豁免和去重
+- relationship-history 的图谱级豁免和重复状态去重
+- world-rule conflict 的结构化执行建议
+- world-rule 的多策略 resolution 选择
 - rule-specific explainers
 
 ## 暂时不要优先做

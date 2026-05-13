@@ -78,6 +78,40 @@
 - `scripts/run_outline_workspace_pipeline.py`
 - merge 默认受 consistency gate 约束
 
+### 6. consistency-check 增强
+
+已支持：
+
+- claim-level `knowledge-state` 提取
+- `knowledge-state conflict` 的非同标题匹配
+- report 级结构化 `patch_suggestions`
+
+### 7. timeline merge 输入层
+
+已支持：
+
+- `plan_idea_merge` 输出结构化 `timeline_merge_inputs`
+- `apply_idea_merge` 通过 `merge_input_id` 直接消费 merge plan 输入
+- 对已有 scene 做跨章节移动时避免重复 scene id
+
+### 8. canon relationship 联动
+
+已支持：
+
+- `state/canon-index.json` 新增 `relationships`
+- relationship idea 可生成 `upsert-canon-relationship` merge input
+- relationship / first-meeting 相关 issue 开始能驱动 canon 关系写入
+- relationship-history 重复状态去重
+- 关系在存在中间状态转移时的豁免规则
+
+### 9. world-rule 闭环
+
+已支持：
+
+- `world-rule conflict` 生成结构化 merge input
+- merge input 可同时更新事件/场景与 `constraints` 的 cutoff rule
+- 在仅有 `world-rule conflict` 的情况下允许通过结构化 resolution input 直接 apply
+
 ## 当前状态判断
 
 项目已经从“蓝图阶段”进入“主链路闭环可跑”的阶段。
@@ -85,7 +119,7 @@
 现在最缺的不是更多零散脚本，而是把以下链路补完整：
 
 - consistency 结果到 timeline merge 的稳定落地
-- 更强的 `knowledge-state` 与 patch 建议
+- 把 `patch_suggestions` 真正接到更完整的 merge 执行策略
 - 更稳定的 timeline / outline / canon 联动
 - 更明确的 skill 与 script 边界
 - 更固定的项目协作文档
@@ -100,16 +134,27 @@
 - 新增 `relationship-history` 与 `world-rule` 两类冲突检查
 - 让 merge plan 与 apply merge 显式读取 consistency gate
 - 让 orchestrator 在 pending idea 上优先跑 consistency gate
+- 扩展 claim-level `knowledge-state` 检查
+- 让 consistency report 输出结构化 `patch_suggestions`
+- 让 merge plan 输出 `timeline_merge_inputs`
+- 让 apply merge 能直接消费 `merge_input_id`
+- 让 canon relationship 进入机器真相源并接入 merge
+- 让 relationship merge input 优先复用已有关系节点
+- 为 relationship-history 增加图谱级去重和转移豁免
+- 让 world-rule conflict 接入 plan/apply 闭环
 
 ## 当前风险
 
 - 语义级 merge 仍然偏弱
-- consistency-check 已可用，但 `knowledge-state` 仍主要靠弱语义推断
+- consistency-check 已能输出 claim-level knowledge-state，但还不是完整图谱推理
+- timeline merge 目前先打通了 timeline / outline 输入层，canon 联动仍偏弱
+- relationship 目前已入 canon，但还缺更丰富的状态图谱和更细的豁免边界
+- world-rule 已有一条结构化 resolution path，但策略还不够丰富
 - skill 规划已写出，但执行优先级还需要持续收敛
 
 ## 近期目标
 
-1. 扩展 `novel-consistency-check` 的 `knowledge-state` 与更细的 patch 建议
-2. 基于 gate-aware merge 继续做 `novel-timeline-merge`
+1. 扩展 `timeline_merge_inputs` 到更多 `world-rule` 策略与 canon 输入
+2. 继续补 relationship 图谱里的更细豁免边界
 3. 提高 timeline / canon / outline 的联动质量
 4. 继续收敛 skill 与 script 的边界

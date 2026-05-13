@@ -25,8 +25,29 @@
 - 建议写入的目标文件
 - 当前 `consistency_gate`
 - intake draft 摘要
+- `timeline_merge_inputs`
 - 还缺哪些结构化信息
 - 对应的 HTML 计划页路径
+
+其中 `timeline_merge_inputs` 可用于承载后续 `novel-timeline-merge` 的第一层可执行输入。
+
+建议字段包括：
+
+- `id`
+- `strategy`
+- `summary`
+- `target_files`
+- `missing_fields`
+- `can_apply_directly`
+- `resolves_blocked_gate`
+- `requires_override`
+- `resolution_note_suggestion`
+- `apply_args`
+
+其中：
+
+- `resolves_blocked_gate` 用于标记这条 merge input 是否能在不手动 override 的前提下结构化消解原有 gate blocker
+- `apply_args` 现在既可承载 timeline / outline / relationship，也可承载 constraint rule 更新参数
 
 ## `state/intake-drafts/<idea-id>.json`
 
@@ -57,8 +78,17 @@
 - `error_count`
 - `warning_count`
 - `issues`
+- `issues[].details`
+- `knowledge_claims`
+- `patch_suggestions`
 - `draft_path`
 - `checked_at`
+
+其中：
+
+- `issues[].details` 可携带具体 `record_id / existing_chapter / draft_chapter / rule_id` 等机器可消费上下文
+- `knowledge_claims` 用于记录从这条 idea 中提取出的“谁在何章知道了什么”的结构化信号
+- `patch_suggestions` 用于记录后续 merge 可直接消费的结构化修补建议
 
 ## `state/idea-log.json`
 
@@ -81,7 +111,8 @@
   "resolution_note": "",
   "consistency_report_path": "/abs/path/to/state/consistency-checks/idea-20260511-001.json",
   "consistency_gate_status": "clear",
-  "merge_gate_override": false
+  "merge_gate_override": false,
+  "applied_merge_input_id": "timeline-merge-001"
 }
 ```
 
@@ -102,11 +133,32 @@
       "death_event_id": null
     }
   ],
+  "relationships": [
+    {
+      "id": "rel-char-protagonist-char-sulan-allied-ch6",
+      "character_ids": ["char-protagonist", "char-sulan"],
+      "state": "allied",
+      "reading_chapter": 6,
+      "event_id": "event-alliance",
+      "notes": "两人在第六章正式结盟。"
+    }
+  ],
   "locations": [],
   "factions": [],
   "items": []
 }
 ```
+
+其中 `relationships` 用于承载第一层正式关系事实源。
+
+建议字段包括：
+
+- `id`
+- `character_ids`
+- `state`
+- `reading_chapter`
+- `event_id`
+- `notes`
 
 ## `timeline/events.json`
 

@@ -175,7 +175,7 @@ def collect_workspace_status(workspace: Path) -> dict[str, Any]:
     status = _default_status(workspace)
     stored_status = read_json(workspace / "state/workspace-status.json", {})
     idea_log = read_json(workspace / "state/idea-log.json", {"ideas": []})
-    canon_index = read_json(workspace / "state/canon-index.json", {"characters": []})
+    canon_index = read_json(workspace / "state/canon-index.json", {"characters": [], "relationships": []})
     events = read_json(workspace / "timeline/events.json", {"events": []})
     scenes = _load_scene_records(workspace)
 
@@ -1536,8 +1536,18 @@ def _duplicate_values(items: list[str]) -> list[str]:
     return sorted(duplicates)
 
 
-def _append_issue(issues: list[dict[str, Any]], level: str, code: str, message: str, path: str | None = None) -> None:
-    issues.append({"level": level, "code": code, "message": message, "path": path})
+def _append_issue(
+    issues: list[dict[str, Any]],
+    level: str,
+    code: str,
+    message: str,
+    path: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    issue = {"level": level, "code": code, "message": message, "path": path}
+    if details:
+        issue["details"] = details
+    issues.append(issue)
 
 
 def validate_workspace(workspace: Path) -> dict[str, Any]:
@@ -1554,16 +1564,20 @@ def validate_workspace(workspace: Path) -> dict[str, Any]:
     scene_index = read_json(workspace / "outline/scene-index.json", {"chapters": []})
 
     characters = canon_index.get("characters", [])
+    relationships = canon_index.get("relationships", [])
     events = events_data.get("events", [])
     chapters = scene_index.get("chapters", [])
     scene_records = _load_scene_records(workspace)
 
     character_ids = [str(item.get("id")) for item in characters if item.get("id")]
+    relationship_ids = [str(item.get("id")) for item in relationships if item.get("id")]
     event_ids = [str(item.get("id")) for item in events if item.get("id")]
     scene_ids = [str(record["scene"].get("id")) for record in scene_records if record["scene"].get("id")]
 
     for duplicate in _duplicate_values(character_ids):
         _append_issue(issues, "error", "duplicate-character-id", f"角色 ID 重复：`{duplicate}`。", "state/canon-index.json")
+    for duplicate in _duplicate_values(relationship_ids):
+        _append_issue(issues, "error", "duplicate-relationship-id", f"关系 ID 重复：`{duplicate}`。", "state/canon-index.json")
     for duplicate in _duplicate_values(event_ids):
         _append_issue(issues, "error", "duplicate-event-id", f"事件 ID 重复：`{duplicate}`。", "timeline/events.json")
     for duplicate in _duplicate_values(scene_ids):
@@ -1592,6 +1606,18 @@ def validate_workspace(workspace: Path) -> dict[str, Any]:
         for participant in event.get("participants", []):
             if participant not in character_map:
                 _append_issue(issues, "error", "unknown-event-participant", f"事件 `{event_id}` 引用了不存在的角色 `{participant}`。", "timeline/events.json")
+
+    for relationship in relationships:
+        relationship_id = relationship.get("id")
+        relation_character_ids = relationship.get("character_ids", [])
+        if len(relation_character_ids) < 2:
+            _append_issue(issues, "error", "invalid-relationship-characters", f"关系 `{relationship_id}` 至少需要两个角色。", "state/canon-index.json")
+        for character_id in relation_character_ids:
+            if character_id not in character_map:
+                _append_issue(issues, "error", "unknown-relationship-character", f"关系 `{relationship_id}` 引用了不存在的角色 `{character_id}`。", "state/canon-index.json")
+        relationship_event_id = relationship.get("event_id")
+        if relationship_event_id and relationship_event_id not in event_map:
+            _append_issue(issues, "error", "unknown-relationship-event", f"关系 `{relationship_id}` 引用了不存在的事件 `{relationship_event_id}`。", "state/canon-index.json")
 
     for record in scene_records:
         scene = record["scene"]
