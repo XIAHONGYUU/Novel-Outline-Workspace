@@ -1,4 +1,5 @@
 from .workspace import (
+    backfill_intake_drafts,
     collect_workspace_status,
     init_workspace,
     ingest_idea,
@@ -11,6 +12,7 @@ from .orchestrator import choose_next_action, run_outline_workspace_pipeline
 
 __all__ = [
     "apply_idea_merge",
+    "backfill_intake_drafts",
     "check_idea_consistency",
     "collect_workspace_status",
     "choose_next_action",

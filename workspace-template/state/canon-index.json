@@ -11,6 +11,8 @@
     }
   ],
   "relationships": [],
+  "knowledge_states": [],
+  "world_rule_exceptions": [],
   "locations": [],
   "factions": [],
   "items": []

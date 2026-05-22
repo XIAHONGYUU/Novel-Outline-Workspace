@@ -1,6 +1,6 @@
 # Project Status
 
-最后更新：2026-05-13
+最后更新：2026-05-22
 
 ## 项目定位
 
@@ -18,7 +18,7 @@
 
 ## 当前阶段
 
-当前处于 `P0 基础工作流搭建期`。
+当前处于 `P0 主链路加固期`。
 
 已经完成的方向：
 
@@ -32,6 +32,10 @@
 - idea intake 第二层草案推断
 - idea-level consistency check 可用版
 - gate-aware merge
+- world-rule 多策略 merge input
+- graph-aware consistency 豁免
+- formal intake backfill / repair 入口
+- domain-specific merge plan explainers
 
 ## 已完成能力
 
@@ -77,6 +81,7 @@
 - `scripts/apply_idea_merge.py`
 - `scripts/run_outline_workspace_pipeline.py`
 - merge 默认受 consistency gate 约束
+- `plan_idea_merge` 的 `proposed_actions` 已升级为更接近执行层的 domain explainers
 
 ### 6. consistency-check 增强
 
@@ -84,7 +89,22 @@
 
 - claim-level `knowledge-state` 提取
 - `knowledge-state conflict` 的非同标题匹配
+- 当同一知情事实同时存在更早与更晚记录时，优先只报告更早冲突，避免重复告警
+- `title-based drift` 对带括注 / 副标题的扩写事件名和场景名开始支持安全的部分匹配
+- `knowledge object` 开始支持有限的同义归一与对象家族匹配，并压缩公共前缀导致的误报
+- `world-rule conflict` / `world_rule_exception` 开始复用结构化 `knowledge_claims` 做 subject/object 协同匹配
+- 单条 idea 中的多条 `knowledge_claims` 开始能稳定抽出，并按 rule 精确回流到 world-rule merge input
+- 多条 `world-rule` 同时命中时，`proposed_actions` 开始先给出 constraints 级分组摘要，再保留每条 rule 的具体输入
+- constraints 分组摘要开始直接列出每条 rule 的策略、direct/override 状态、目标文件，以及按 direct / review 拆开的跨 domain impacts
+- constraints 分组摘要开始区分 `shared-subject` 与 `split-subjects`，避免多主体 world-rule 被误看成可共用同一条 exception 解释
+- 同一主体下如果标题 object 和正文 object 同时落成 claim，且前者只是同一家族的泛化说法，claim 层开始优先保留更具体那条
+- 多主体句子里如果前后主体分别对应不同 object，claim 提取开始按主体窗口截断，避免把后一个主体的 object 串回前一个主体
+- `identity` family 里的近义 object 开始按更具体 claim 收敛，例如“首领身份 / 组织首领是谁”会优先保留后者
+- world-rule 相关的 canon explainer 开始引用各自命中的 claim，而不是回退到第一条 claim
+- 多条 rule 共享同一事件/场景写入时，重复的 timeline / outline explainers 开始做去重收敛
 - report 级结构化 `patch_suggestions`
+- 对后文“再次意识到 / 已经知道”类复述记录的豁免
+- relationship-history 对未来重复状态的图谱级豁免
 
 ### 7. timeline merge 输入层
 
@@ -93,6 +113,8 @@
 - `plan_idea_merge` 输出结构化 `timeline_merge_inputs`
 - `apply_idea_merge` 通过 `merge_input_id` 直接消费 merge plan 输入
 - 对已有 scene 做跨章节移动时避免重复 scene id
+- event / scene note 已可由 merge input 显式携带
+- plan explainers 已可输出 `readiness / merge_input_id / planned_writes / source_signals`
 
 ### 8. canon relationship 联动
 
@@ -103,26 +125,46 @@
 - relationship / first-meeting 相关 issue 开始能驱动 canon 关系写入
 - relationship-history 重复状态去重
 - 关系在存在中间状态转移时的豁免规则
+- 对“重新结盟 / 再次和解”且未来已有同状态记录的 case 开始按图谱路径豁免
 
 ### 9. world-rule 闭环
 
 已支持：
 
 - `world-rule conflict` 生成结构化 merge input
-- merge input 可同时更新事件/场景与 `constraints` 的 cutoff rule
-- 在仅有 `world-rule conflict` 的情况下允许通过结构化 resolution input 直接 apply
+- merge input 可按不同策略更新事件/场景、`constraints` cutoff 或规则说明
+- `resolve-world-rule-by-delaying-event` 可把 idea 事件延后到 cutoff 之后
+- `resolve-world-rule-by-updating-cutoff` 可把 rule cutoff 对齐到新事件
+- `document-world-rule-exception` 可只记录规则说明，并显式要求 override
+
+### 10. demo workspace 整理
+
+已支持：
+
+- 对 legacy duplicate idea 进行收敛
+- 为缺 intake draft 的历史 idea 补回最小 draft
+- 让 demo workspace 回到“有一条可继续 plan-merge 的 pending idea”状态
+
+### 11. intake backfill / repair
+
+已支持：
+
+- `scripts/backfill_intake_drafts.py`
+- 对缺 draft / 缺 view / 缺 path 元数据的 pending idea 做正式 backfill
+- 按 `--all-pending` 或 `--all-ideas` 批量修复
+- 按 `--force-rebuild` 重建已有 draft
 
 ## 当前状态判断
 
 项目已经从“蓝图阶段”进入“主链路闭环可跑”的阶段。
 
-现在最缺的不是更多零散脚本，而是把以下链路补完整：
+现在最缺的不是更多零散脚本，而是把以下链路继续做厚：
 
-- consistency 结果到 timeline merge 的稳定落地
-- 把 `patch_suggestions` 真正接到更完整的 merge 执行策略
+- merge plan 的影响面表达
+- intake 对 legacy / 模糊 idea 的修复能力
 - 更稳定的 timeline / outline / canon 联动
 - 更明确的 skill 与 script 边界
-- 更固定的项目协作文档
+- 更完整的 demo / 文档闭环
 
 ## 最近完成
 
@@ -142,19 +184,45 @@
 - 让 relationship merge input 优先复用已有关系节点
 - 为 relationship-history 增加图谱级去重和转移豁免
 - 让 world-rule conflict 接入 plan/apply 闭环
+- 把 world-rule 的单一路径扩成多策略输入
+- 为 world-rule 增加“延后事件 / 只记规则说明”两条分支
+- 为 knowledge-state 增加后文复述型豁免
+- 为 relationship-history 增加未来重复状态的图谱级豁免
+- 清理 demo workspace 的 legacy duplicate idea，并补回代表样本的 intake draft / plan
+- 落地正式的 intake backfill / repair 脚本入口
+- 为 legacy idea backfill 增加测试覆盖
+- 把 merge plan 的影响面说明升级成 domain-specific explainers
+- 为 timeline / outline / canon / constraints explainers 增加测试覆盖
+- 为 `state/canon-index.json` 增加 `knowledge_states` / `world_rule_exceptions`
+- 新增 `upsert-canon-knowledge-state` / `update-existing-knowledge-state`
+- `document-world-rule-exception` 开始同步写入 canon 机器事实源
+- consistency-check 开始读取 canon knowledge / world-rule exception 回流结果
+- validator 开始校验 knowledge-state / world-rule exception 的引用完整性
+- 收紧 `knowledge-state conflict` 边界：当更早 canon / timeline 记录已足够解释冲突时，不再同时报未来重复记录
+- 收紧 `title-based drift` 边界：正式事件 / 场景标题即使带有地点括注或副标题，也能继续命中同一 idea
+- 收紧 `knowledge object` 边界：`内鬼 / 泄密`、`身份 / 是谁`、`不是一路 / 不是同一阵营` 这类常见表达开始做保守归一，同时不再把“有人调查”误判成“有人泄密”
+- 收紧 `world-rule exception` 边界：规则检测与例外豁免开始共用 `knowledge_claims`，`组织首领身份 / 组织首领是谁` 这类同义 object 不再依赖原句字面命中
+- 收紧多 claim / 多 rule 闭环：`plan_idea_merge` 现在能把不同 rule 绑定回各自命中的 claim，而不再把第一条 subject claim 错绑到所有 rule
+- 收紧 constraints explainer 边界：多条 world-rule 冲突时，plan 已开始先按 rule 分组摘要，减少人工在多条输入间来回对照
+- 细化 constraints 影响面说明：grouped summary 已开始把每条 rule 的目标文件、direct/override 信息，以及 `timeline / outline / canon / constraints` 的 direct / review impact 类型直接摊开
+- 细化 canon 影响面说明：多条 world-rule exception 的 canon explainer 已开始按各自命中的 claim 输出 source signal
+- 收敛 explainers 噪音：同一事件/场景的重复 timeline / outline 说明开始优先保留一条更高可执行性的版本
 
 ## 当前风险
 
 - 语义级 merge 仍然偏弱
-- consistency-check 已能输出 claim-level knowledge-state，但还不是完整图谱推理
-- timeline merge 目前先打通了 timeline / outline 输入层，canon 联动仍偏弱
-- relationship 目前已入 canon，但还缺更丰富的状态图谱和更细的豁免边界
-- world-rule 已有一条结构化 resolution path，但策略还不够丰富
+- consistency-check 已能输出 claim-level knowledge-state，但还不是完整知识图谱推理
+- timeline merge 已接上第一层 canon knowledge / exception 联动，但还不是完整知识图谱推理
+- relationship 目前已入 canon，但仍缺更丰富的状态图谱和更细的豁免边界
+- world-rule 已有多策略输入，但“只改说明”的策略仍依赖人工 override
+- world-rule 现在已处理单 idea 下的多 claim / 多 rule 基本分流，并补上第一层 rule 级 direct / review impact 摘要、`shared-subject / split-subjects` 边界、标题/正文泛化 claim 收敛、mixed-subject claim 串绑收紧，以及 `identity` family 的更具体 claim 收敛；但更多 object family 仍偏薄
+- intake backfill 目前仍以启发式推断为主，手工增强字段在 force rebuild 下会被重建
+- canon 侧 explainers 仍有一部分 fallback case，尤其是更复杂的知识图谱与关系状态转移
 - skill 规划已写出，但执行优先级还需要持续收敛
 
 ## 近期目标
 
-1. 扩展 `timeline_merge_inputs` 到更多 `world-rule` 策略与 canon 输入
-2. 继续补 relationship 图谱里的更细豁免边界
-3. 提高 timeline / canon / outline 的联动质量
+1. 继续扩展 timeline-order / knowledge-state 规则
+2. 继续收紧 relationship / world-rule exception 的边界说明
+3. 继续增强 repair / merge explainers 的边界说明
 4. 继续收敛 skill 与 script 的边界

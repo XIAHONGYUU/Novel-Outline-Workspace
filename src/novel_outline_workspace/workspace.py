@@ -31,6 +31,19 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def default_canon_index(novel_name: str) -> dict[str, Any]:
+    return {
+        "novel_name": novel_name,
+        "characters": [],
+        "relationships": [],
+        "knowledge_states": [],
+        "world_rule_exceptions": [],
+        "locations": [],
+        "factions": [],
+        "items": [],
+    }
+
+
 def slugify(text: str) -> str:
     lowered = text.strip().lower()
     lowered = re.sub(r"\s+", "-", lowered)
@@ -175,7 +188,7 @@ def collect_workspace_status(workspace: Path) -> dict[str, Any]:
     status = _default_status(workspace)
     stored_status = read_json(workspace / "state/workspace-status.json", {})
     idea_log = read_json(workspace / "state/idea-log.json", {"ideas": []})
-    canon_index = read_json(workspace / "state/canon-index.json", {"characters": [], "relationships": []})
+    canon_index = read_json(workspace / "state/canon-index.json", default_canon_index(workspace.name))
     events = read_json(workspace / "timeline/events.json", {"events": []})
     scenes = _load_scene_records(workspace)
 
@@ -997,7 +1010,7 @@ def _render_validation_html(report: dict[str, Any], status: dict[str, Any]) -> s
 
 
 def _render_timeline_html(workspace: Path, status: dict[str, Any]) -> str:
-    canon_index = read_json(workspace / "state/canon-index.json", {"characters": []})
+    canon_index = read_json(workspace / "state/canon-index.json", default_canon_index(workspace.name))
     events = read_json(workspace / "timeline/events.json", {"events": []}).get("events", [])
     characters = {
         item.get("id"): item.get("name", item.get("id"))
@@ -1526,6 +1539,164 @@ def ingest_idea(
     return {"idea": idea, "inbox_file": str((workspace / 'inbox' / inbox_name).resolve()), "status": status}
 
 
+def _resolve_intake_paths(workspace: Path, idea: dict[str, Any]) -> tuple[Path, Path]:
+    idea_id = str(idea.get("id") or "").strip()
+    configured_draft = idea.get("intake_draft_path")
+    configured_view = idea.get("intake_draft_view_path")
+
+    draft_path = Path(configured_draft).expanduser() if configured_draft else workspace / "state/intake-drafts" / f"{idea_id}.json"
+    if not draft_path.is_absolute():
+        draft_path = (workspace / draft_path).resolve()
+
+    view_path = Path(configured_view).expanduser() if configured_view else workspace / "views/intake-drafts" / f"{idea_id}.html"
+    if not view_path.is_absolute():
+        view_path = (workspace / view_path).resolve()
+
+    return draft_path, view_path
+
+
+def _idea_needs_intake_repair(workspace: Path, idea: dict[str, Any]) -> bool:
+    draft_path, view_path = _resolve_intake_paths(workspace, idea)
+    if not str(idea.get("intake_draft_path") or "").strip():
+        return True
+    if not str(idea.get("intake_draft_view_path") or "").strip():
+        return True
+    return not draft_path.exists() or not view_path.exists()
+
+
+def _merge_intake_draft(existing: dict[str, Any], inferred: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(inferred)
+    for key in ["title", "kind", "tags", "target_files", "suggested_domains"]:
+        if existing.get(key):
+            merged[key] = existing[key]
+    for key in [
+        "chapter_hints",
+        "location_candidates",
+        "character_mentions",
+        "canon_update_candidates",
+        "timeline_candidates",
+        "outline_candidates",
+        "open_questions",
+    ]:
+        if existing.get(key):
+            merged[key] = existing[key]
+    if existing.get("confidence"):
+        merged["confidence"] = existing["confidence"]
+    if existing.get("created_at"):
+        merged["created_at"] = existing["created_at"]
+    if existing.get("content"):
+        merged["content"] = existing["content"]
+    return merged
+
+
+def backfill_intake_drafts(
+    workspace: Path,
+    *,
+    idea_ids: list[str] | None = None,
+    include_all_pending: bool = False,
+    include_all_ideas: bool = False,
+    force_rebuild: bool = False,
+) -> dict[str, Any]:
+    workspace = workspace.expanduser().resolve()
+    idea_log_path = workspace / "state/idea-log.json"
+    idea_log = read_json(idea_log_path, {"ideas": []})
+    ideas = idea_log.get("ideas", [])
+    status = collect_workspace_status(workspace)
+    protagonist_name = status.get("protagonist_name")
+
+    explicit_ids = [str(item).strip() for item in idea_ids or [] if str(item).strip()]
+    if explicit_ids:
+        selected: list[tuple[int, dict[str, Any]]] = []
+        for requested_id in explicit_ids:
+            match_index = next((index for index, item in enumerate(ideas) if item.get("id") == requested_id), None)
+            if match_index is None:
+                raise ValueError(f"unknown idea id: {requested_id}")
+            selected.append((match_index, ideas[match_index]))
+    elif include_all_ideas:
+        selected = list(enumerate(ideas))
+    elif include_all_pending:
+        selected = [(index, item) for index, item in enumerate(ideas) if item.get("status") == "pending"]
+    else:
+        selected = [
+            (index, item)
+            for index, item in enumerate(ideas)
+            if item.get("status") == "pending" and _idea_needs_intake_repair(workspace, item)
+        ]
+
+    repaired: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    changed = False
+    repair_selected_even_if_present = bool(explicit_ids or include_all_pending or include_all_ideas or force_rebuild)
+
+    for index, idea in selected:
+        draft_path, view_path = _resolve_intake_paths(workspace, idea)
+        existing_draft = read_json(draft_path, {}) if draft_path.exists() else {}
+        if existing_draft and not force_rebuild and not repair_selected_even_if_present and not _idea_needs_intake_repair(workspace, idea):
+            skipped.append({"idea_id": idea.get("id"), "reason": "draft and view already exist"})
+            continue
+
+        title = str(idea.get("title") or "").strip()
+        content = str(idea.get("content") or "").strip()
+        normalized_kind = infer_idea_kind(title, content, str(idea.get("kind") or "auto"))
+        tags = infer_idea_tags(title, content, idea.get("tags"), protagonist_name)
+        target_files = infer_target_files(normalized_kind, title, content, idea.get("target_files"))
+        suggested_domains = infer_suggested_domains(normalized_kind, target_files)
+        inferred_draft = build_intake_draft(
+            idea_id=str(idea.get("id")),
+            title=title,
+            content=content,
+            kind=normalized_kind,
+            tags=tags,
+            target_files=target_files,
+            suggested_domains=suggested_domains,
+            protagonist_name=protagonist_name,
+        )
+        draft = inferred_draft if force_rebuild or not existing_draft else _merge_intake_draft(existing_draft, inferred_draft)
+        if not draft.get("content"):
+            draft["content"] = content
+
+        draft_path.parent.mkdir(parents=True, exist_ok=True)
+        view_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json(draft_path, draft)
+        write_text(view_path, _render_intake_draft_html(draft))
+
+        updated_idea = dict(idea)
+        updated_idea["kind"] = normalized_kind
+        updated_idea["tags"] = tags
+        updated_idea["target_files"] = target_files
+        updated_idea["suggested_domains"] = suggested_domains
+        updated_idea["intake_draft_path"] = str(draft_path.resolve())
+        updated_idea["intake_draft_view_path"] = str(view_path.resolve())
+        updated_idea["updated_at"] = now_iso()
+        ideas[index] = updated_idea
+        changed = True
+        repaired.append(
+            {
+                "idea_id": updated_idea["id"],
+                "draft_path": str(draft_path.resolve()),
+                "view_path": str(view_path.resolve()),
+                "kind": normalized_kind,
+                "force_rebuilt": bool(force_rebuild and existing_draft),
+            }
+        )
+
+    if changed:
+        write_json(idea_log_path, idea_log)
+
+    refreshed_status = collect_workspace_status(workspace)
+    write_json(workspace / "state/workspace-status.json", refreshed_status)
+    render_workspace_views(workspace, status=refreshed_status)
+    return {
+        "workspace_path": str(workspace),
+        "selected_count": len(selected),
+        "repaired_count": len(repaired),
+        "skipped_count": len(skipped),
+        "repaired": repaired,
+        "skipped": skipped,
+        "status": refreshed_status,
+    }
+
+
 def _duplicate_values(items: list[str]) -> list[str]:
     seen: set[str] = set()
     duplicates: set[str] = set()
@@ -1558,26 +1729,36 @@ def validate_workspace(workspace: Path) -> dict[str, Any]:
         if not (workspace / rel_path).exists():
             _append_issue(issues, "error", "missing-core-file", f"缺少核心文件 `{rel_path}`。", rel_path)
 
-    canon_index = read_json(workspace / "state/canon-index.json", {"characters": []})
+    canon_index = read_json(workspace / "state/canon-index.json", default_canon_index(workspace.name))
     idea_log = read_json(workspace / "state/idea-log.json", {"ideas": []})
     events_data = read_json(workspace / "timeline/events.json", {"events": []})
     scene_index = read_json(workspace / "outline/scene-index.json", {"chapters": []})
+    constraints = read_json(workspace / "constraints/constraints.json", {"rules": []})
 
     characters = canon_index.get("characters", [])
     relationships = canon_index.get("relationships", [])
+    knowledge_states = canon_index.get("knowledge_states", [])
+    world_rule_exceptions = canon_index.get("world_rule_exceptions", [])
     events = events_data.get("events", [])
     chapters = scene_index.get("chapters", [])
     scene_records = _load_scene_records(workspace)
 
     character_ids = [str(item.get("id")) for item in characters if item.get("id")]
     relationship_ids = [str(item.get("id")) for item in relationships if item.get("id")]
+    knowledge_state_ids = [str(item.get("id")) for item in knowledge_states if item.get("id")]
+    world_rule_exception_ids = [str(item.get("id")) for item in world_rule_exceptions if item.get("id")]
     event_ids = [str(item.get("id")) for item in events if item.get("id")]
     scene_ids = [str(record["scene"].get("id")) for record in scene_records if record["scene"].get("id")]
+    rule_ids = {str(item.get("id")) for item in constraints.get("rules", []) if item.get("id")}
 
     for duplicate in _duplicate_values(character_ids):
         _append_issue(issues, "error", "duplicate-character-id", f"角色 ID 重复：`{duplicate}`。", "state/canon-index.json")
     for duplicate in _duplicate_values(relationship_ids):
         _append_issue(issues, "error", "duplicate-relationship-id", f"关系 ID 重复：`{duplicate}`。", "state/canon-index.json")
+    for duplicate in _duplicate_values(knowledge_state_ids):
+        _append_issue(issues, "error", "duplicate-knowledge-state-id", f"知情记录 ID 重复：`{duplicate}`。", "state/canon-index.json")
+    for duplicate in _duplicate_values(world_rule_exception_ids):
+        _append_issue(issues, "error", "duplicate-world-rule-exception-id", f"规则例外 ID 重复：`{duplicate}`。", "state/canon-index.json")
     for duplicate in _duplicate_values(event_ids):
         _append_issue(issues, "error", "duplicate-event-id", f"事件 ID 重复：`{duplicate}`。", "timeline/events.json")
     for duplicate in _duplicate_values(scene_ids):
@@ -1618,6 +1799,81 @@ def validate_workspace(workspace: Path) -> dict[str, Any]:
         relationship_event_id = relationship.get("event_id")
         if relationship_event_id and relationship_event_id not in event_map:
             _append_issue(issues, "error", "unknown-relationship-event", f"关系 `{relationship_id}` 引用了不存在的事件 `{relationship_event_id}`。", "state/canon-index.json")
+
+    for knowledge_state in knowledge_states:
+        knowledge_state_id = knowledge_state.get("id")
+        subject_id = str(knowledge_state.get("subject_id") or "").strip()
+        if not subject_id or subject_id not in character_map:
+            _append_issue(
+                issues,
+                "error",
+                "unknown-knowledge-state-subject",
+                f"知情记录 `{knowledge_state_id}` 引用了不存在的角色 `{subject_id or 'unknown'}`。",
+                "state/canon-index.json",
+            )
+        if not isinstance(knowledge_state.get("reading_chapter"), int):
+            _append_issue(
+                issues,
+                "error",
+                "invalid-knowledge-state-chapter",
+                f"知情记录 `{knowledge_state_id}` 缺少合法的 `reading_chapter`。",
+                "state/canon-index.json",
+            )
+        if not str(knowledge_state.get("object_key") or "").strip():
+            _append_issue(
+                issues,
+                "error",
+                "invalid-knowledge-state-object",
+                f"知情记录 `{knowledge_state_id}` 缺少 `object_key`。",
+                "state/canon-index.json",
+            )
+        knowledge_event_id = knowledge_state.get("event_id")
+        if knowledge_event_id and knowledge_event_id not in event_map:
+            _append_issue(
+                issues,
+                "error",
+                "unknown-knowledge-state-event",
+                f"知情记录 `{knowledge_state_id}` 引用了不存在的事件 `{knowledge_event_id}`。",
+                "state/canon-index.json",
+            )
+
+    for exception in world_rule_exceptions:
+        exception_id = exception.get("id")
+        rule_id = str(exception.get("rule_id") or "").strip()
+        if not rule_id or rule_id not in rule_ids:
+            _append_issue(
+                issues,
+                "error",
+                "unknown-world-rule-exception-rule",
+                f"规则例外 `{exception_id}` 引用了不存在的约束 `{rule_id or 'unknown'}`。",
+                "state/canon-index.json",
+            )
+        subject_id = str(exception.get("subject_id") or "").strip()
+        if subject_id and subject_id not in character_map:
+            _append_issue(
+                issues,
+                "error",
+                "unknown-world-rule-exception-subject",
+                f"规则例外 `{exception_id}` 引用了不存在的角色 `{subject_id}`。",
+                "state/canon-index.json",
+            )
+        if not isinstance(exception.get("reading_chapter"), int):
+            _append_issue(
+                issues,
+                "error",
+                "invalid-world-rule-exception-chapter",
+                f"规则例外 `{exception_id}` 缺少合法的 `reading_chapter`。",
+                "state/canon-index.json",
+            )
+        exception_event_id = exception.get("event_id")
+        if exception_event_id and exception_event_id not in event_map:
+            _append_issue(
+                issues,
+                "error",
+                "unknown-world-rule-exception-event",
+                f"规则例外 `{exception_id}` 引用了不存在的事件 `{exception_event_id}`。",
+                "state/canon-index.json",
+            )
 
     for record in scene_records:
         scene = record["scene"]

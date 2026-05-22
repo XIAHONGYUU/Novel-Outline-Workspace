@@ -9,6 +9,7 @@ from .workspace import (
     _html_page,
     _safe,
     collect_workspace_status,
+    default_canon_index,
     now_iso,
     read_json,
     render_workspace_views,
@@ -21,6 +22,7 @@ from .workspace import (
 DOMAIN_TARGET_FILES = {
     "canon": ["state/canon-index.json", "canon/characters.md"],
     "outline": ["outline/scene-index.json", "outline/master-outline.md"],
+    "constraints": ["constraints/constraints.json"],
     "timeline": ["timeline/events.json"],
 }
 
@@ -41,6 +43,9 @@ TIMELINE_RELEVANT_ISSUES = {
     "knowledge-state-conflict",
     "timeline-order-conflict",
     "location-continuity-conflict",
+}
+KNOWLEDGE_RELEVANT_ISSUES = {
+    "knowledge-state-conflict",
 }
 RELATIONSHIP_RELEVANT_ISSUES = {
     "relationship-history-conflict",
@@ -106,15 +111,6 @@ def _infer_domains(idea: dict[str, Any], protagonist_name: str | None) -> list[s
     return sorted(domains)
 
 
-def _domain_reason(domain: str, idea: dict[str, Any]) -> str:
-    kind = str(idea.get("kind", "misc"))
-    if domain == "canon":
-        return f"这条 `{kind}` 想法会影响正式设定或人物认知。"
-    if domain == "outline":
-        return f"这条 `{kind}` 想法会影响章节推进或场景安排。"
-    return f"这条 `{kind}` 想法需要落到事件顺序或时间节点。"
-
-
 def _unresolved_questions(domains: list[str]) -> list[str]:
     questions: list[str] = []
     if "canon" in domains:
@@ -124,6 +120,521 @@ def _unresolved_questions(domains: list[str]) -> list[str]:
     if "timeline" in domains:
         questions.append("这条想法对应的真实时间序号、阅读章节和参与者是什么？")
     return questions
+
+
+def _target_file_domains(target_files: list[str]) -> list[str]:
+    domains: list[str] = []
+    for path in target_files:
+        if path.startswith("timeline/"):
+            domains.append("timeline")
+        elif path.startswith("outline/"):
+            domains.append("outline")
+        elif path.startswith("constraints/"):
+            domains.append("constraints")
+        elif path.startswith("canon/") or path.startswith("state/canon"):
+            domains.append("canon")
+    return sorted(set(domains))
+
+
+def _readiness_for_input(item: dict[str, Any], gate: dict[str, Any]) -> str:
+    if item.get("can_apply_directly"):
+        return "ready"
+    if item.get("missing_fields"):
+        return "needs-info"
+    if item.get("requires_override") or (gate.get("status") == "blocked" and not item.get("resolves_blocked_gate")):
+        return "blocked-by-gate"
+    if gate.get("status") == "warning":
+        return "needs-review"
+    return "planned"
+
+
+def _source_signals_for_input(domain: str, item: dict[str, Any], draft: dict[str, Any], report: dict[str, Any]) -> list[str]:
+    signals: list[str] = []
+    apply_args = item.get("apply_args", {}) if isinstance(item.get("apply_args"), dict) else {}
+    if domain in {"timeline", "outline"}:
+        chapter = apply_args.get("reading_chapter") if domain == "timeline" else apply_args.get("chapter_number")
+        if isinstance(chapter, int):
+            signals.append(f"intake: chapter hint {chapter}")
+        location = apply_args.get("location")
+        if domain == "timeline" and isinstance(location, str) and location.strip():
+            signals.append(f"intake: location {location}")
+    mentions = draft.get("character_mentions", [])
+    if mentions:
+        signals.append(f"intake: characters {', '.join(str(item) for item in mentions[:3])}")
+    if item.get("source_issue_code"):
+        signals.append(f"consistency: {item.get('source_issue_code')}")
+    if domain == "canon":
+        if apply_args.get("world_rule_exception_object_phrase") or apply_args.get("world_rule_exception_object_key"):
+            subject_name = apply_args.get("world_rule_exception_subject_name") or apply_args.get("world_rule_exception_subject_id") or "角色"
+            chapter = apply_args.get("world_rule_exception_reading_chapter")
+            object_phrase = apply_args.get("world_rule_exception_object_phrase") or apply_args.get("world_rule_exception_object_key")
+            signals.append(f"claim: {subject_name} 第{chapter if isinstance(chapter, int) else '?'}章 知道{object_phrase}")
+        elif apply_args.get("knowledge_object_phrase") or apply_args.get("knowledge_object_key"):
+            subject_name = apply_args.get("knowledge_subject_name") or apply_args.get("knowledge_subject_id") or "角色"
+            chapter = apply_args.get("knowledge_reading_chapter")
+            object_phrase = apply_args.get("knowledge_object_phrase") or apply_args.get("knowledge_object_key")
+            signals.append(f"claim: {subject_name} 第{chapter if isinstance(chapter, int) else '?'}章 知道{object_phrase}")
+        elif report.get("knowledge_claims"):
+            claim = report["knowledge_claims"][0]
+            signals.append(f"claim: {claim.get('subject_name')} 第{claim.get('chapter')}章 {claim.get('verb')}{claim.get('object_phrase')}")
+    if domain == "constraints" and item.get("source_issue_code") == "world-rule-conflict":
+        signals.append("consistency: world-rule conflict")
+    return signals
+
+
+def _timeline_summary_from_input(item: dict[str, Any]) -> tuple[str, list[str]]:
+    apply_args = item.get("apply_args", {}) if isinstance(item.get("apply_args"), dict) else {}
+    strategy = str(item.get("strategy") or "")
+    event_label = str(apply_args.get("event_label") or apply_args.get("event_id") or "事件")
+    chapter = apply_args.get("reading_chapter")
+    location = str(apply_args.get("location") or "").strip()
+    participants = [str(participant) for participant in apply_args.get("participant_ids", []) if str(participant).strip()]
+    writes: list[str] = [f"event: {event_label}"]
+    if isinstance(chapter, int):
+        writes.append(f"reading_chapter: {chapter}")
+    if location:
+        writes.append(f"location: {location}")
+    if participants:
+        writes.append(f"participants: {', '.join(participants)}")
+    if strategy == "update-existing-event":
+        summary = f"更新事件 `{apply_args.get('event_id')}` 的时间线挂载，并同步章节 / 地点 / 参与者字段。"
+    elif strategy == "resolve-world-rule-by-delaying-event":
+        summary = f"把事件 `{event_label}` 延后到第 {chapter} 章，保持原有 rule cutoff 不变。"
+    else:
+        summary = f"在 `timeline/events.json` 新增或更新事件 `{event_label}`，并挂到第 {chapter or '?'} 章。"
+    return summary, writes
+
+
+def _outline_summary_from_input(item: dict[str, Any]) -> tuple[str, list[str]]:
+    apply_args = item.get("apply_args", {}) if isinstance(item.get("apply_args"), dict) else {}
+    strategy = str(item.get("strategy") or "")
+    scene_title = str(apply_args.get("scene_title") or apply_args.get("scene_id") or "场景")
+    chapter = apply_args.get("chapter_number")
+    pov = str(apply_args.get("scene_pov") or "").strip()
+    event_ids = [str(event_id) for event_id in apply_args.get("scene_event_ids", []) if str(event_id).strip()]
+    writes: list[str] = [f"scene: {scene_title}"]
+    if isinstance(chapter, int):
+        writes.append(f"chapter: {chapter}")
+    if pov:
+        writes.append(f"pov: {pov}")
+    if event_ids:
+        writes.append(f"event_ids: {', '.join(event_ids)}")
+    if strategy == "update-existing-scene":
+        summary = f"更新场景 `{apply_args.get('scene_id')}` 的章节挂载，并同步 POV / 事件关联。"
+    else:
+        summary = f"在 `outline/scene-index.json` 新增或更新第 {chapter or '?'} 章场景 `{scene_title}`。"
+    return summary, writes
+
+
+def _canon_summary_from_input(item: dict[str, Any], report: dict[str, Any], draft: dict[str, Any]) -> tuple[str, list[str]]:
+    apply_args = item.get("apply_args", {}) if isinstance(item.get("apply_args"), dict) else {}
+    strategy = str(item.get("strategy") or "")
+    if strategy in {"upsert-canon-relationship", "update-existing-relationship"}:
+        relationship_id = str(apply_args.get("relationship_id") or "relationship")
+        state = str(apply_args.get("relationship_state") or "")
+        character_ids = [str(item) for item in apply_args.get("relationship_character_ids", []) if str(item).strip()]
+        chapter = apply_args.get("relationship_reading_chapter")
+        writes = [
+            f"relationship_id: {relationship_id}",
+            f"state: {state}",
+            f"characters: {', '.join(character_ids)}",
+        ]
+        if isinstance(chapter, int):
+            writes.append(f"reading_chapter: {chapter}")
+        summary = f"把关系 `{relationship_id}` 写入 `state/canon-index.json`，同步 pair / state / chapter。"
+        return summary, writes
+    if strategy in {"upsert-canon-knowledge-state", "update-existing-knowledge-state"}:
+        knowledge_state_id = str(apply_args.get("knowledge_state_id") or "knowledge-state")
+        subject_name = str(apply_args.get("knowledge_subject_name") or apply_args.get("knowledge_subject_id") or "角色")
+        chapter = apply_args.get("knowledge_reading_chapter")
+        writes = [
+            f"knowledge_state_id: {knowledge_state_id}",
+            f"subject: {subject_name}",
+            f"object: {apply_args.get('knowledge_object_phrase') or apply_args.get('knowledge_object_key')}",
+        ]
+        if isinstance(chapter, int):
+            writes.append(f"reading_chapter: {chapter}")
+        summary = f"把 `{subject_name}` 的知情变化写入 `state/canon-index.json`，作为正式 knowledge-state 事实源。"
+        return summary, writes
+    if strategy == "document-world-rule-exception" and apply_args.get("world_rule_exception_id"):
+        exception_id = str(apply_args.get("world_rule_exception_id") or "world-rule-exception")
+        subject_name = str(apply_args.get("world_rule_exception_subject_name") or apply_args.get("world_rule_exception_subject_id") or "角色")
+        chapter = apply_args.get("world_rule_exception_reading_chapter")
+        writes = [
+            f"world_rule_exception_id: {exception_id}",
+            f"rule_id: {apply_args.get('rule_id')}",
+            f"subject: {subject_name}",
+        ]
+        if isinstance(chapter, int):
+            writes.append(f"reading_chapter: {chapter}")
+        summary = f"把规则例外 `{exception_id}` 写入 `state/canon-index.json`，让后续 consistency 直接识别这条正式豁免。"
+        return summary, writes
+
+    claims = report.get("knowledge_claims", [])
+    if claims:
+        claim = claims[0]
+        writes = [
+            f"knowledge_subject: {claim.get('subject_name')}",
+            f"knowledge_chapter: {claim.get('chapter')}",
+            f"knowledge_object: {claim.get('object_phrase')}",
+        ]
+        summary = f"当前没有直接 canon merge input；建议把 `{claim.get('subject_name')}` 的知情变化补进角色或设定说明。"
+        return summary, writes
+
+    mentions = [str(item) for item in draft.get("character_mentions", []) if str(item).strip()]
+    writes = [f"review_characters: {', '.join(mentions)}"] if mentions else []
+    summary = "当前 canon 侧还缺直接结构化写入，建议先确认是否需要新增角色条目、关系节点或正式设定说明。"
+    return summary, writes
+
+
+def _constraints_summary_from_input(item: dict[str, Any]) -> tuple[str, list[str]]:
+    apply_args = item.get("apply_args", {}) if isinstance(item.get("apply_args"), dict) else {}
+    strategy = str(item.get("strategy") or "")
+    rule_id = str(apply_args.get("rule_id") or "rule")
+    writes = [f"rule_id: {rule_id}"]
+    if apply_args.get("rule_applies_until_event_id"):
+        writes.append(f"cutoff_event: {apply_args.get('rule_applies_until_event_id')}")
+    if strategy == "resolve-world-rule-by-updating-cutoff":
+        summary = f"把约束 `{rule_id}` 的 cutoff 对齐到新事件，直接修改 `constraints/constraints.json`。"
+    elif strategy == "document-world-rule-exception":
+        summary = f"为约束 `{rule_id}` 追加例外说明，保留原 cutoff 不变。"
+    else:
+        summary = f"更新约束 `{rule_id}` 的规则字段。"
+    return summary, writes
+
+
+def _world_rule_impacts_for_item(item: dict[str, Any]) -> list[str]:
+    strategy = str(item.get("strategy") or "").strip()
+    impact_map = {
+        "resolve-world-rule-by-delaying-event": [
+            "timeline:update-event",
+            "outline:update-scene",
+        ],
+        "resolve-world-rule-by-updating-cutoff": [
+            "timeline:update-event",
+            "outline:update-scene",
+            "constraints:update-cutoff",
+        ],
+        "document-world-rule-exception": [
+            "constraints:note-exception",
+            "canon:record-exception",
+        ],
+    }
+    impacts = impact_map.get(strategy)
+    if impacts:
+        return impacts
+
+    return [
+        f"{domain}:review"
+        for domain in _target_file_domains([str(path) for path in item.get("target_files", []) if str(path).strip()])
+    ]
+
+
+def _impact_bucket_for_item(item: dict[str, Any]) -> str:
+    if item.get("can_apply_directly") and not item.get("requires_override") and not item.get("missing_fields"):
+        return "direct"
+    return "review"
+
+
+def _world_rule_subjects_for_item(item: dict[str, Any]) -> list[str]:
+    apply_args = item.get("apply_args", {}) if isinstance(item.get("apply_args"), dict) else {}
+    primary_subject = (
+        apply_args.get("world_rule_exception_subject_name")
+        or apply_args.get("rule_subject_name")
+        or apply_args.get("world_rule_exception_subject_id")
+        or apply_args.get("rule_subject_id")
+    )
+    text = str(primary_subject or "").strip()
+    return [text] if text else []
+
+
+def _world_rule_subject_scope(rule_subjects: set[str], all_subjects: set[str]) -> str:
+    normalized_rule_subjects = {str(subject).strip() for subject in rule_subjects if str(subject).strip()}
+    normalized_all_subjects = {str(subject).strip() for subject in all_subjects if str(subject).strip()}
+    if not normalized_rule_subjects:
+        return "review-subject"
+    if len(normalized_rule_subjects) > 1:
+        return "mixed-subjects"
+    if len(normalized_all_subjects) <= 1:
+        return "shared-subject"
+    return "split-subjects"
+
+
+def _constraints_group_explainer(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    world_rule_items = [
+        item
+        for item in items
+        if str(item.get("source_issue_code") or "") == "world-rule-conflict"
+    ]
+    rule_ids = sorted(
+        {
+            str((item.get("apply_args", {}) or {}).get("rule_id") or "").strip()
+            for item in world_rule_items
+            if str((item.get("apply_args", {}) or {}).get("rule_id") or "").strip()
+        }
+    )
+    if len(rule_ids) < 2:
+        return None
+
+    strategies_by_rule: dict[str, list[str]] = {}
+    targets_by_rule: dict[str, set[str]] = {}
+    domains_by_rule: dict[str, set[str]] = {}
+    impacts_by_rule: dict[str, set[str]] = {}
+    direct_impacts_by_rule: dict[str, set[str]] = {}
+    review_impacts_by_rule: dict[str, set[str]] = {}
+    subjects_by_rule: dict[str, set[str]] = {}
+    direct_by_rule: dict[str, int] = {}
+    override_by_rule: dict[str, int] = {}
+    all_targets: set[str] = set()
+    for item in world_rule_items:
+        apply_args = item.get("apply_args", {}) if isinstance(item.get("apply_args"), dict) else {}
+        rule_id = str(apply_args.get("rule_id") or "").strip()
+        strategy = str(item.get("strategy") or "").strip()
+        if not rule_id or not strategy:
+            continue
+        strategies_by_rule.setdefault(rule_id, [])
+        if strategy not in strategies_by_rule[rule_id]:
+            strategies_by_rule[rule_id].append(strategy)
+        targets = {str(path) for path in item.get("target_files", []) if str(path).strip()}
+        all_targets.update(targets)
+        targets_by_rule.setdefault(rule_id, set()).update(targets)
+        domains_by_rule.setdefault(rule_id, set()).update(_target_file_domains(item.get("target_files", [])))
+        impacts = _world_rule_impacts_for_item(item)
+        impacts_by_rule.setdefault(rule_id, set()).update(impacts)
+        subjects_by_rule.setdefault(rule_id, set()).update(_world_rule_subjects_for_item(item))
+        if _impact_bucket_for_item(item) == "direct":
+            direct_impacts_by_rule.setdefault(rule_id, set()).update(impacts)
+        else:
+            review_impacts_by_rule.setdefault(rule_id, set()).update(impacts)
+        if item.get("can_apply_directly"):
+            direct_by_rule[rule_id] = direct_by_rule.get(rule_id, 0) + 1
+        if item.get("requires_override"):
+            override_by_rule[rule_id] = override_by_rule.get(rule_id, 0) + 1
+
+    all_subjects = {
+        subject
+        for subjects in subjects_by_rule.values()
+        for subject in subjects
+        if str(subject).strip()
+    }
+    planned_writes = [
+        (
+            f"{rule_id}: "
+            f"{', '.join(strategies_by_rule.get(rule_id, [])) or 'review'}"
+            f" | direct={direct_by_rule.get(rule_id, 0)}"
+            f" | override={override_by_rule.get(rule_id, 0)}"
+            f" | subjects={', '.join(sorted(subjects_by_rule.get(rule_id, set())))}"
+            f" | subject_scope={_world_rule_subject_scope(subjects_by_rule.get(rule_id, set()), all_subjects)}"
+            f" | domains={', '.join(sorted(domains_by_rule.get(rule_id, set())))}"
+            f" | impacts={', '.join(sorted(impacts_by_rule.get(rule_id, set())))}"
+            f" | direct_impacts={', '.join(sorted(direct_impacts_by_rule.get(rule_id, set())))}"
+            f" | review_impacts={', '.join(sorted(review_impacts_by_rule.get(rule_id, set())))}"
+            f" | targets={', '.join(sorted(targets_by_rule.get(rule_id, set())))}"
+        )
+        for rule_id in rule_ids
+    ]
+    summary = f"当前这条 idea 同时触发了 {len(rule_ids)} 条 world-rule；先按 rule 分组复核各自的 cutoff / exception 处理策略。"
+    return {
+        "domain": "constraints",
+        "action": "先按 rule 分组复核 constraints 层的冲突与处理方向。",
+        "summary": summary,
+        "target_files": sorted(all_targets),
+        "reason": summary,
+        "confidence": "high",
+        "merge_input_id": None,
+        "readiness": "needs-review",
+        "planned_writes": planned_writes,
+        "source_signals": [f"consistency: world-rule conflict x{len(rule_ids)}"],
+    }
+
+
+def _readiness_rank(value: Any) -> int:
+    order = {
+        "ready": 4,
+        "needs-review": 3,
+        "planned": 2,
+        "needs-info": 1,
+        "blocked-by-gate": 0,
+    }
+    return order.get(str(value or ""), -1)
+
+
+def _dedupe_domain_explainers(explainers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    index_by_key: dict[tuple[str, str, tuple[str, ...]], int] = {}
+
+    for explainer in explainers:
+        explainer = {**explainer, "_duplicate_count": int(explainer.get("_duplicate_count") or 1)}
+        key = (
+            str(explainer.get("domain") or ""),
+            str(explainer.get("summary") or ""),
+            tuple(str(item) for item in explainer.get("planned_writes", [])),
+        )
+        existing_index = index_by_key.get(key)
+        if existing_index is None:
+            index_by_key[key] = len(deduped)
+            deduped.append(explainer)
+            continue
+
+        current = deduped[existing_index]
+        preferred, secondary = (
+            (explainer, current)
+            if _readiness_rank(explainer.get("readiness")) > _readiness_rank(current.get("readiness"))
+            else (current, explainer)
+        )
+        merged = dict(preferred)
+        merged["target_files"] = sorted(
+            {
+                str(item)
+                for item in [*current.get("target_files", []), *explainer.get("target_files", [])]
+                if str(item).strip()
+            }
+        )
+        merged["source_signals"] = list(
+            dict.fromkeys(
+                str(item)
+                for item in [*current.get("source_signals", []), *explainer.get("source_signals", [])]
+                if str(item).strip()
+            )
+        )
+        merged["missing_fields"] = sorted(
+            {
+                str(item)
+                for item in [*current.get("missing_fields", []), *explainer.get("missing_fields", [])]
+                if str(item).strip()
+            }
+        )
+        merged["_duplicate_count"] = int(current.get("_duplicate_count") or 1) + int(explainer.get("_duplicate_count") or 1)
+        merge_input_ids = {
+            str(item.get("merge_input_id"))
+            for item in (current, explainer)
+            if item.get("merge_input_id") is not None
+        }
+        merged["merge_input_id"] = next(iter(merge_input_ids)) if merged["_duplicate_count"] == 1 and len(merge_input_ids) == 1 else None
+        merged["confidence"] = preferred.get("confidence") or secondary.get("confidence")
+        deduped[existing_index] = merged
+
+    return [{key: value for key, value in item.items() if key != "_duplicate_count"} for item in deduped]
+
+
+def _fallback_domain_summary(domain: str, idea: dict[str, Any], draft: dict[str, Any], report: dict[str, Any]) -> tuple[str, list[str], list[str]]:
+    kind = str(idea.get("kind", "misc"))
+    if domain == "canon":
+        mentions = [str(item) for item in draft.get("character_mentions", []) if str(item).strip()]
+        if kind in {"reveal", "twist", "backstory"}:
+            summary = f"复核这条 `{kind}` 想法带来的人物认知变化，决定是否补进正式设定层。"
+        else:
+            summary = f"复核这条 `{kind}` 想法是否需要写入正式设定层，而不是只停留在 timeline / outline。"
+        if mentions:
+            writes = [f"character_mentions: {', '.join(mentions)}"]
+        elif kind in {"reveal", "twist", "backstory"}:
+            writes = [f"review_knowledge_shift: {str(idea.get('title') or idea.get('content') or 'idea').strip()}"]
+        else:
+            writes = []
+        signals = [f"intake: characters {', '.join(mentions[:3])}"] if mentions else []
+        return summary, writes, signals
+    if domain == "outline":
+        chapters = [str(item) for item in draft.get("chapter_hints", [])]
+        summary = f"确认这条 `{kind}` 想法具体落到哪一章、哪个 scene，再决定是否写入 `outline/scene-index.json`。"
+        writes = [f"chapter_hints: {', '.join(chapters)}"] if chapters else []
+        signals = [f"intake: chapter hints {', '.join(chapters)}"] if chapters else []
+        return summary, writes, signals
+    summary = f"把这条 `{kind}` 想法落成正式事件，再补章节、地点和参与者。"
+    writes = []
+    signals = []
+    return summary, writes, signals
+
+
+def _domain_explainers(
+    workspace: Path,
+    idea: dict[str, Any],
+    domains: list[str],
+    gate: dict[str, Any],
+    draft: dict[str, Any],
+    report: dict[str, Any],
+    timeline_merge_inputs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    explainers: list[dict[str, Any]] = []
+    if gate["status"] in {"missing", "stale"}:
+        explainers.append(
+            {
+                "domain": "gate",
+                "action": "先运行或重跑 consistency check。",
+                "summary": gate["summary"],
+                "target_files": ["state/consistency-checks", "views/consistency-checks"],
+                "reason": gate["summary"],
+                "confidence": "high",
+                "merge_input_id": None,
+                "readiness": "blocked-by-gate",
+                "planned_writes": [],
+                "source_signals": [],
+            }
+        )
+    elif gate["status"] == "blocked":
+        explainers.append(
+            {
+                "domain": "gate",
+                "action": "先处理 consistency blockers，再决定如何 merge。",
+                "summary": gate["summary"],
+                "target_files": ["state/consistency-checks", "views/consistency-checks"],
+                "reason": gate["summary"],
+                "confidence": "high",
+                "merge_input_id": None,
+                "readiness": "blocked-by-gate",
+                "planned_writes": [],
+                "source_signals": [f"blockers: {len(gate.get('blockers', []))}"],
+            }
+        )
+
+    constraints_group_explainer = _constraints_group_explainer(timeline_merge_inputs)
+    if constraints_group_explainer is not None:
+        explainers.append(constraints_group_explainer)
+
+    covered_domains: set[str] = set()
+    for item in timeline_merge_inputs:
+        for domain in _target_file_domains(item.get("target_files", [])):
+            covered_domains.add(domain)
+            if domain == "timeline":
+                summary, planned_writes = _timeline_summary_from_input(item)
+            elif domain == "outline":
+                summary, planned_writes = _outline_summary_from_input(item)
+            elif domain == "canon":
+                summary, planned_writes = _canon_summary_from_input(item, report, draft)
+            else:
+                summary, planned_writes = _constraints_summary_from_input(item)
+            explainers.append(
+                {
+                    "domain": domain,
+                    "action": f"处理 {domain} 层的具体写入。",
+                    "summary": summary,
+                    "target_files": item.get("target_files", []),
+                    "reason": summary,
+                    "confidence": "medium" if item.get("missing_fields") else "high",
+                    "merge_input_id": item.get("id"),
+                    "readiness": _readiness_for_input(item, gate),
+                    "planned_writes": planned_writes,
+                    "source_signals": _source_signals_for_input(domain, item, draft, report),
+                    "missing_fields": item.get("missing_fields", []),
+                }
+            )
+
+    for domain in sorted(set(domains) - covered_domains):
+        summary, planned_writes, source_signals = _fallback_domain_summary(domain, idea, draft, report)
+        explainers.append(
+            {
+                "domain": domain,
+                "action": f"复核 {domain} 层的补写需求。",
+                "summary": summary,
+                "target_files": DOMAIN_TARGET_FILES[domain],
+                "reason": summary,
+                "confidence": "medium",
+                "merge_input_id": None,
+                "readiness": "planned" if gate.get("can_plan_merge") else "blocked-by-gate",
+                "planned_writes": planned_writes,
+                "source_signals": source_signals,
+            }
+        )
+    return _dedupe_domain_explainers(explainers)
 
 
 def _consistency_gate(workspace: Path, idea: dict[str, Any]) -> dict[str, Any]:
@@ -383,13 +894,45 @@ def _existing_relationship_match(
     return None
 
 
+def _knowledge_state_record_id(subject_id: str, object_key: str, reading_chapter: int | None) -> str:
+    chapter_suffix = f"-ch{reading_chapter}" if isinstance(reading_chapter, int) else ""
+    return f"know-{subject_id}-{slugify(object_key)}{chapter_suffix}"
+
+
+def _knowledge_state_records(canon_index: dict[str, Any], subject_id: str) -> list[dict[str, Any]]:
+    records = [
+        item
+        for item in canon_index.get("knowledge_states", [])
+        if str(item.get("subject_id") or "").strip() == subject_id
+    ]
+    records.sort(
+        key=lambda item: (
+            item.get("reading_chapter") if isinstance(item.get("reading_chapter"), int) else 10**9,
+            str(item.get("id", "")),
+        )
+    )
+    return records
+
+
+def _existing_knowledge_state_match(canon_index: dict[str, Any], subject_id: str, object_key: str) -> dict[str, Any] | None:
+    for item in _knowledge_state_records(canon_index, subject_id):
+        if str(item.get("object_key") or "").strip() == object_key:
+            return item
+    return None
+
+
+def _world_rule_exception_record_id(rule_id: str, subject_key: str, object_key: str, reading_chapter: int | None) -> str:
+    chapter_suffix = f"-ch{reading_chapter}" if isinstance(reading_chapter, int) else ""
+    return f"rulex-{slugify(rule_id)}-{slugify(subject_key or 'subject')}-{slugify(object_key or 'exception')}{chapter_suffix}"
+
+
 def _default_timeline_apply_args(
     workspace: Path,
     idea: dict[str, Any],
     draft: dict[str, Any],
     domains: list[str],
 ) -> tuple[dict[str, Any], list[str], list[str]]:
-    canon_index = read_json(workspace / "state/canon-index.json", {"characters": []})
+    canon_index = read_json(workspace / "state/canon-index.json", default_canon_index(workspace.name))
     events = _event_records(workspace)
     participant_ids = _resolve_participant_ids(draft, canon_index)
     _, id_to_name = _character_lookup(canon_index)
@@ -419,6 +962,7 @@ def _default_timeline_apply_args(
                 "reading_chapter": chapter_hint,
                 "location": location,
                 "participant_ids": participant_ids,
+                "event_notes": idea.get("content", ""),
             }
         )
         target_files.append("timeline/events.json")
@@ -437,6 +981,7 @@ def _default_timeline_apply_args(
                 "scene_status": "planned",
                 "scene_character_ids": participant_ids,
                 "scene_event_ids": [event_id] if event_id else [],
+                "scene_notes": idea.get("content", ""),
             }
         )
         target_files.extend(["outline/scene-index.json", "outline/master-outline.md"])
@@ -489,7 +1034,7 @@ def _build_default_relationship_merge_input(
     draft: dict[str, Any],
     gate: dict[str, Any],
 ) -> dict[str, Any] | None:
-    canon_index = read_json(workspace / "state/canon-index.json", {"characters": [], "relationships": []})
+    canon_index = read_json(workspace / "state/canon-index.json", default_canon_index(workspace.name))
     participant_ids = _resolve_participant_ids(draft, canon_index)
     relationship_state = _relationship_state_from_text(f"{idea.get('title', '')}\n{draft.get('content', '')}")
     reading_chapter = _first_int(draft.get("chapter_hints", []))
@@ -539,6 +1084,60 @@ def _build_default_relationship_merge_input(
         "warnings": list(gate.get("warnings", [])),
         "resolution_note_suggestion": f"把 `{idea.get('title')}` 的关系状态写入 canon。",
         "apply_args": apply_args,
+    }
+
+
+def _build_default_knowledge_merge_input(
+    workspace: Path,
+    idea: dict[str, Any],
+    report: dict[str, Any],
+    gate: dict[str, Any],
+) -> dict[str, Any] | None:
+    if any(str(issue.get("code") or "") == "knowledge-state-conflict" for issue in report.get("issues", [])):
+        return None
+    claims = report.get("knowledge_claims", [])
+    if not claims or idea.get("kind") not in {"reveal", "twist", "backstory"}:
+        return None
+    claim = next((item for item in claims if item.get("subject_id") and item.get("object_key")), None)
+    if claim is None:
+        return None
+    canon_index = read_json(workspace / "state/canon-index.json", default_canon_index(workspace.name))
+    subject_id = str(claim.get("subject_id") or "").strip()
+    object_key = str(claim.get("object_key") or "").strip()
+    existing_state = _existing_knowledge_state_match(canon_index, subject_id, object_key)
+    chapter = claim.get("chapter")
+    knowledge_state_id = (
+        str(existing_state.get("id"))
+        if existing_state and existing_state.get("id")
+        else _knowledge_state_record_id(subject_id, object_key, chapter if isinstance(chapter, int) else None)
+    )
+    missing_fields: list[str] = []
+    if not isinstance(chapter, int):
+        missing_fields.append("knowledge_reading_chapter")
+    return {
+        "id": "timeline-merge-know-001",
+        "kind": "timeline-merge-input",
+        "strategy": "update-existing-knowledge-state" if existing_state else "upsert-canon-knowledge-state",
+        "summary": f"把 `{claim.get('subject_name')}` 关于 `{claim.get('object_phrase')}` 的知情变化补进 canon 机器真相源。",
+        "target_files": ["state/canon-index.json", "canon/characters.md"],
+        "source_issue_code": None,
+        "source_patch_suggestion_ids": [],
+        "missing_fields": missing_fields,
+        "can_apply_directly": gate.get("can_apply_merge", False) and not missing_fields,
+        "requires_override": False,
+        "warnings": list(gate.get("warnings", [])),
+        "resolution_note_suggestion": f"把 `{claim.get('subject_name')}` 的知情变化写入 canon。",
+        "apply_args": {
+            "knowledge_state_id": knowledge_state_id,
+            "knowledge_subject_id": subject_id,
+            "knowledge_subject_name": claim.get("subject_name"),
+            "knowledge_object_key": object_key,
+            "knowledge_object_phrase": claim.get("object_phrase"),
+            "knowledge_verb": claim.get("verb"),
+            "knowledge_reading_chapter": chapter if isinstance(chapter, int) else None,
+            "knowledge_event_id": None,
+            "knowledge_notes": idea.get("content", ""),
+        },
     }
 
 
@@ -666,12 +1265,105 @@ def _build_issue_driven_timeline_merge_inputs(
     return inputs
 
 
+def _build_issue_driven_knowledge_merge_inputs(
+    workspace: Path,
+    report: dict[str, Any],
+    gate: dict[str, Any],
+) -> list[dict[str, Any]]:
+    canon_index = read_json(workspace / "state/canon-index.json", default_canon_index(workspace.name))
+    claims = report.get("knowledge_claims", [])
+    claim_map = {
+        (str(item.get("subject_id") or ""), str(item.get("object_key") or "")): item
+        for item in claims
+        if item.get("subject_id") and item.get("object_key")
+    }
+    inputs: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for issue in report.get("issues", []):
+        issue_code = str(issue.get("code") or "")
+        if issue_code not in KNOWLEDGE_RELEVANT_ISSUES:
+            continue
+        details = issue.get("details", {}) if isinstance(issue.get("details"), dict) else {}
+        if str(details.get("direction") or "") != "knowledge-advance":
+            continue
+        subject_id = str(details.get("subject_id") or "").strip()
+        if not subject_id:
+            continue
+        claim = None
+        detail_object = str(details.get("knowledge_object") or "").strip()
+        for item in claims:
+            if str(item.get("subject_id") or "").strip() != subject_id:
+                continue
+            if detail_object and str(item.get("object_phrase") or "").strip() != detail_object:
+                continue
+            claim = item
+            break
+        if claim is None and len(claim_map) == 1:
+            claim = next(iter(claim_map.values()))
+        if claim is None:
+            continue
+        object_key = str(claim.get("object_key") or "").strip()
+        if not object_key:
+            continue
+        existing_state = _existing_knowledge_state_match(canon_index, subject_id, object_key)
+        knowledge_state_id = (
+            str(existing_state.get("id"))
+            if existing_state and existing_state.get("id")
+            else _knowledge_state_record_id(subject_id, object_key, claim.get("chapter") if isinstance(claim.get("chapter"), int) else None)
+        )
+        issue_key = (issue_code, knowledge_state_id)
+        if issue_key in seen:
+            continue
+        seen.add(issue_key)
+
+        missing_fields: list[str] = []
+        chapter = claim.get("chapter")
+        if not isinstance(chapter, int):
+            missing_fields.append("knowledge_reading_chapter")
+        apply_args = {
+            "knowledge_state_id": knowledge_state_id,
+            "knowledge_subject_id": subject_id,
+            "knowledge_subject_name": claim.get("subject_name"),
+            "knowledge_object_key": object_key,
+            "knowledge_object_phrase": claim.get("object_phrase"),
+            "knowledge_verb": claim.get("verb"),
+            "knowledge_reading_chapter": chapter if isinstance(chapter, int) else None,
+            "knowledge_event_id": details.get("record_id") if details.get("record_type") == "event" else None,
+            "knowledge_notes": issue.get("message"),
+        }
+        inputs.append(
+            {
+                "id": f"timeline-merge-know-{len(inputs) + 1:03d}",
+                "kind": "timeline-merge-input",
+                "strategy": "update-existing-knowledge-state" if existing_state else "upsert-canon-knowledge-state",
+                "summary": (
+                    f"更新现有知情记录 `{knowledge_state_id}`，把 `{claim.get('subject_name')}` 的知情点前移到第 {chapter} 章。"
+                    if existing_state
+                    else f"把 `{claim.get('subject_name')}` 关于 `{claim.get('object_phrase')}` 的知情点写入 canon。"
+                ),
+                "target_files": ["state/canon-index.json", "canon/characters.md"],
+                "source_issue_code": issue_code,
+                "source_patch_suggestion_ids": _patch_suggestion_ids(report, issue_code),
+                "missing_fields": missing_fields,
+                "can_apply_directly": not missing_fields,
+                "requires_override": False,
+                "resolves_blocked_gate": True,
+                "resolves_issue_codes": [issue_code],
+                "warnings": list(gate.get("warnings", [])),
+                "resolution_note_suggestion": str(issue.get("message") or ""),
+                "apply_args": apply_args,
+            }
+        )
+    return inputs
+
+
 def _build_issue_driven_relationship_merge_inputs(
     workspace: Path,
     report: dict[str, Any],
     gate: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    canon_index = read_json(workspace / "state/canon-index.json", {"characters": [], "relationships": []})
+    canon_index = read_json(workspace / "state/canon-index.json", default_canon_index(workspace.name))
     inputs: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
 
@@ -705,6 +1397,8 @@ def _build_issue_driven_relationship_merge_inputs(
         missing_fields: list[str] = []
         if not isinstance(draft_chapter, int):
             missing_fields.append("relationship_reading_chapter")
+        record_type = str(details.get("record_type") or "")
+        resolves_from_canon = record_type == "canon-relationship"
         apply_args = {
             "relationship_id": relationship_id,
             "relationship_character_ids": character_ids,
@@ -727,8 +1421,10 @@ def _build_issue_driven_relationship_merge_inputs(
                 "source_issue_code": issue_code,
                 "source_patch_suggestion_ids": _patch_suggestion_ids(report, issue_code),
                 "missing_fields": missing_fields,
-                "can_apply_directly": gate.get("can_apply_merge", False) and not missing_fields,
-                "requires_override": gate.get("status") == "blocked",
+                "can_apply_directly": (gate.get("can_apply_merge", False) or resolves_from_canon) and not missing_fields,
+                "requires_override": gate.get("status") == "blocked" and not resolves_from_canon,
+                "resolves_blocked_gate": resolves_from_canon,
+                "resolves_issue_codes": [issue_code] if resolves_from_canon else [],
                 "warnings": list(gate.get("warnings", [])),
                 "resolution_note_suggestion": str(issue.get("message") or ""),
                 "apply_args": apply_args,
@@ -746,6 +1442,9 @@ def _build_issue_driven_world_rule_merge_inputs(
     gate: dict[str, Any],
 ) -> list[dict[str, Any]]:
     inputs: list[dict[str, Any]] = []
+    events = _event_records(workspace)
+    constraints = read_json(workspace / "constraints/constraints.json", {"rules": []})
+    rule_map = {str(item.get("id")): item for item in constraints.get("rules", []) if item.get("id")}
     default_apply_args, default_targets, default_missing_fields = _default_timeline_apply_args(workspace, idea, draft, domains)
     if not default_apply_args.get("event_id"):
         return inputs
@@ -758,13 +1457,54 @@ def _build_issue_driven_world_rule_merge_inputs(
         rule_id = str(details.get("rule_id") or "").strip()
         if not rule_id:
             continue
+        rule = rule_map.get(rule_id, {})
         event_id = str(default_apply_args.get("event_id") or "")
         event_label = str(default_apply_args.get("event_label") or idea.get("title") or "")
+        cutoff_chapter = details.get("cutoff_chapter")
+        delayed_chapter = details.get("suggested_delay_chapter")
+        if not isinstance(delayed_chapter, int):
+            delayed_chapter = (cutoff_chapter + 1) if isinstance(cutoff_chapter, int) else None
+
+        delay_apply_args = {
+            **default_apply_args,
+            "rule_subject_id": details.get("matched_claim_subject_id"),
+            "rule_subject_name": details.get("matched_claim_subject_name") or details.get("rule_subject"),
+            "chronological_index": _suggest_chronological_index(events, delayed_chapter if isinstance(delayed_chapter, int) else None),
+            "reading_chapter": delayed_chapter,
+            "chapter_number": delayed_chapter,
+            "event_notes": f"{idea.get('content', '')}（按硬约束延后到第 {delayed_chapter} 章。）" if isinstance(delayed_chapter, int) else idea.get("content", ""),
+            "scene_notes": f"{idea.get('content', '')}（按硬约束延后到第 {delayed_chapter} 章。）" if isinstance(delayed_chapter, int) else idea.get("content", ""),
+        }
+        delay_missing_fields = [field for field in default_missing_fields if field not in {"reading_chapter", "chapter_number"}]
+        if not isinstance(delayed_chapter, int):
+            delay_missing_fields.extend(["reading_chapter", "chapter_number"])
+        inputs.append(
+            {
+                "id": f"timeline-merge-rule-delay-{len(inputs) + 1:03d}",
+                "kind": "timeline-merge-input",
+                "strategy": "resolve-world-rule-by-delaying-event",
+                "summary": f"把 `{event_label}` 延后到第 {delayed_chapter} 章，并保持原有约束 cutoff 不变。",
+                "target_files": list(default_targets),
+                "source_issue_code": issue_code,
+                "source_patch_suggestion_ids": _patch_suggestion_ids(report, issue_code),
+                "missing_fields": sorted(set(delay_missing_fields)),
+                "can_apply_directly": not delay_missing_fields,
+                "requires_override": False,
+                "resolves_blocked_gate": True,
+                "resolves_issue_codes": [issue_code],
+                "warnings": list(gate.get("warnings", [])),
+                "resolution_note_suggestion": f"把 `{event_label}` 延后到约束 `{rule_id}` 的 cutoff 之后。",
+                "apply_args": delay_apply_args,
+            }
+        )
+
         apply_args = {
             **default_apply_args,
             "rule_id": rule_id,
             "rule_type": "hard-canon",
             "rule_label": details.get("rule_label"),
+            "rule_subject_id": details.get("matched_claim_subject_id"),
+            "rule_subject_name": details.get("matched_claim_subject_name") or details.get("rule_subject"),
             "rule_applies_until_event_id": event_id,
             "rule_notes": f"把 `{details.get('rule_label')}` 的截止点对齐到 `{event_label}`。",
         }
@@ -776,7 +1516,7 @@ def _build_issue_driven_world_rule_merge_inputs(
             targets.append("constraints/constraints.json")
         inputs.append(
             {
-                "id": f"timeline-merge-rule-{len(inputs) + 1:03d}",
+                "id": f"timeline-merge-rule-cutoff-{len(inputs) + 1:03d}",
                 "kind": "timeline-merge-input",
                 "strategy": "resolve-world-rule-by-updating-cutoff",
                 "summary": f"创建/更新 `{event_label}`，并把约束 `{rule_id}` 的截止点对齐到该事件。",
@@ -787,9 +1527,71 @@ def _build_issue_driven_world_rule_merge_inputs(
                 "can_apply_directly": not missing_fields,
                 "requires_override": False,
                 "resolves_blocked_gate": True,
+                "resolves_issue_codes": [issue_code],
                 "warnings": list(gate.get("warnings", [])),
                 "resolution_note_suggestion": str(issue.get("message") or ""),
                 "apply_args": apply_args,
+            }
+        )
+
+        current_rule_notes = str(rule.get("notes") or "").strip()
+        note_lines = [current_rule_notes] if current_rule_notes else []
+        note_lines.append(
+            f"例外说明：`{idea.get('title')}` 当前作为第 {details.get('draft_chapter')} 章的提前知情点，需人工确认该约束的解释边界。"
+        )
+        matching_claim = {
+            "subject_id": details.get("matched_claim_subject_id"),
+            "subject_name": details.get("matched_claim_subject_name"),
+            "object_key": details.get("matched_claim_object_key"),
+            "object_phrase": details.get("matched_claim_object_phrase"),
+        }
+        if not any(matching_claim.values()):
+            matching_claim = next(
+                (
+                    claim
+                    for claim in report.get("knowledge_claims", [])
+                    if str(claim.get("subject_name") or "").strip() == str(details.get("rule_subject") or "").strip()
+                ),
+                {},
+            )
+        exception_object_key = str(matching_claim.get("object_key") or details.get("rule_object") or "").strip()
+        exception_object_phrase = str(matching_claim.get("object_phrase") or details.get("rule_object") or "").strip()
+        exception_subject_name = str(matching_claim.get("subject_name") or details.get("rule_subject") or "").strip()
+        exception_subject_id = matching_claim.get("subject_id")
+        exception_chapter = details.get("draft_chapter") if isinstance(details.get("draft_chapter"), int) else None
+        exception_id = _world_rule_exception_record_id(rule_id, exception_subject_name, exception_object_key, exception_chapter)
+        inputs.append(
+            {
+                "id": f"timeline-merge-rule-note-{len(inputs) + 1:03d}",
+                "kind": "timeline-merge-input",
+                "strategy": "document-world-rule-exception",
+                "summary": f"保留 `{rule_id}` 的 cutoff，仅补一条规则说明，记录 `{idea.get('title')}` 的人工解释边界。",
+                "target_files": ["state/canon-index.json", "constraints/constraints.json", "canon/world-rules.md"],
+                "source_issue_code": issue_code,
+                "source_patch_suggestion_ids": _patch_suggestion_ids(report, issue_code),
+                "missing_fields": [],
+                "can_apply_directly": gate.get("can_apply_merge", False),
+                "requires_override": gate.get("status") == "blocked",
+                "resolves_blocked_gate": False,
+                "warnings": list(gate.get("warnings", [])),
+                "resolution_note_suggestion": "先把这条 world-rule 例外说明记入 constraints，再决定是否真正放行。",
+                "apply_args": {
+                    "rule_id": rule_id,
+                    "rule_type": str(rule.get("type") or "hard-canon"),
+                    "rule_label": details.get("rule_label"),
+                    "rule_subject_id": exception_subject_id,
+                    "rule_subject_name": exception_subject_name,
+                    "rule_applies_until_event_id": details.get("cutoff_event_id"),
+                    "rule_notes": "\n".join(note_lines),
+                    "world_rule_exception_id": exception_id,
+                    "world_rule_exception_subject_id": exception_subject_id,
+                    "world_rule_exception_subject_name": exception_subject_name,
+                    "world_rule_exception_object_key": exception_object_key,
+                    "world_rule_exception_object_phrase": exception_object_phrase,
+                    "world_rule_exception_reading_chapter": exception_chapter,
+                    "world_rule_exception_event_id": event_id or None,
+                    "world_rule_exception_notes": str(issue.get("message") or ""),
+                },
             }
         )
     return inputs
@@ -805,6 +1607,7 @@ def _build_timeline_merge_inputs(
     report = load_consistency_report(workspace, str(idea.get("id"))) or {}
     inputs: list[dict[str, Any]] = []
     inputs.extend(_build_issue_driven_timeline_merge_inputs(workspace, report, gate))
+    inputs.extend(_build_issue_driven_knowledge_merge_inputs(workspace, report, gate))
     inputs.extend(_build_issue_driven_relationship_merge_inputs(workspace, report, gate))
     inputs.extend(_build_issue_driven_world_rule_merge_inputs(workspace, idea, draft, domains, report, gate))
 
@@ -815,6 +1618,9 @@ def _build_timeline_merge_inputs(
     default_relationship_input = _build_default_relationship_merge_input(workspace, idea, draft, gate)
     if default_relationship_input is not None:
         inputs.append(default_relationship_input)
+    default_knowledge_input = _build_default_knowledge_merge_input(workspace, idea, report, gate)
+    if default_knowledge_input is not None:
+        inputs.append(default_knowledge_input)
 
     deduped: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -831,9 +1637,10 @@ def _render_merge_plan_html(plan: dict[str, Any]) -> str:
     action_rows = "\n".join(
         "<tr>"
         f"<td><code>{_safe(action.get('domain'))}</code></td>"
-        f"<td>{_safe(action.get('action'))}</td>"
+        f"<td>{_safe(action.get('summary') or action.get('action'))}</td>"
+        f"<td><code>{_safe(action.get('readiness') or '-')}</code></td>"
         f"<td>{_safe(', '.join(action.get('target_files', [])))}</td>"
-        f"<td>{_safe(action.get('reason'))}</td>"
+        f"<td>{_safe(' / '.join(action.get('planned_writes', [])) or '-')}</td>"
         "</tr>"
         for action in plan.get("proposed_actions", [])
     )
@@ -892,7 +1699,7 @@ def _render_merge_plan_html(plan: dict[str, Any]) -> str:
     <section class="panel" style="margin-top: 24px;">
       <h2>Proposed Actions</h2>
       <table>
-        <thead><tr><th>Domain</th><th>Action</th><th>Targets</th><th>Reason</th></tr></thead>
+        <thead><tr><th>Domain</th><th>Summary</th><th>Readiness</th><th>Targets</th><th>Planned Writes</th></tr></thead>
         <tbody>{action_rows}</tbody>
       </table>
     </section>
@@ -914,29 +1721,10 @@ def plan_idea_merge(workspace: Path, idea_id: str) -> dict[str, Any]:
     _, idea, _ = _find_idea(workspace, idea_id)
     domains = _infer_domains(idea, status.get("protagonist_name"))
     gate = _consistency_gate(workspace, idea)
+    draft = _load_intake_draft(workspace, idea_id)
+    report = load_consistency_report(workspace, idea_id) or {}
     intake_summary = _load_intake_draft_summary(workspace, idea_id)
     timeline_merge_inputs = _build_timeline_merge_inputs(workspace, idea, domains, gate)
-    proposed_actions: list[dict[str, Any]] = []
-    if gate["status"] in {"missing", "stale"}:
-        proposed_actions.append(
-            {
-                "domain": "gate",
-                "action": "先运行或重跑 consistency check。",
-                "target_files": ["state/consistency-checks", "views/consistency-checks"],
-                "reason": gate["summary"],
-                "confidence": "high",
-            }
-        )
-    elif gate["status"] == "blocked":
-        proposed_actions.append(
-            {
-                "domain": "gate",
-                "action": "先处理 consistency blockers，再决定如何 merge。",
-                "target_files": ["state/consistency-checks", "views/consistency-checks"],
-                "reason": gate["summary"],
-                "confidence": "high",
-            }
-        )
     plan = {
         "idea_id": idea_id,
         "title": idea.get("title"),
@@ -947,16 +1735,7 @@ def plan_idea_merge(workspace: Path, idea_id: str) -> dict[str, Any]:
         "consistency_gate": gate,
         "intake_summary": intake_summary,
         "timeline_merge_inputs": timeline_merge_inputs,
-        "proposed_actions": proposed_actions + [
-            {
-                "domain": domain,
-                "action": f"把该想法并入 {domain} 层。",
-                "target_files": DOMAIN_TARGET_FILES[domain],
-                "reason": _domain_reason(domain, idea),
-                "confidence": "medium",
-            }
-            for domain in domains
-        ],
+        "proposed_actions": _domain_explainers(workspace, idea, domains, gate, draft, report, timeline_merge_inputs),
         "unresolved_questions": _unresolved_questions(domains) + gate["blockers"] + gate["warnings"],
         "created_at": now_iso(),
     }
@@ -996,7 +1775,7 @@ def _upsert_character(
     death_event_id: str | None,
 ) -> str:
     canon_index_path = workspace / "state/canon-index.json"
-    canon_index = read_json(canon_index_path, {"novel_name": workspace.name, "characters": [], "locations": [], "factions": [], "items": []})
+    canon_index = read_json(canon_index_path, default_canon_index(workspace.name))
     character = None
     for item in canon_index.get("characters", []):
         if item.get("id") == character_id:
@@ -1032,10 +1811,7 @@ def _upsert_relationship(
     relationship_notes: str,
 ) -> str:
     canon_index_path = workspace / "state/canon-index.json"
-    canon_index = read_json(
-        canon_index_path,
-        {"novel_name": workspace.name, "characters": [], "relationships": [], "locations": [], "factions": [], "items": []},
-    )
+    canon_index = read_json(canon_index_path, default_canon_index(workspace.name))
     relationship = None
     for item in canon_index.setdefault("relationships", []):
         if item.get("id") == relationship_id:
@@ -1051,6 +1827,92 @@ def _upsert_relationship(
     relationship["notes"] = relationship_notes
     canon_index["relationships"] = sorted(
         canon_index.get("relationships", []),
+        key=lambda item: (
+            item.get("reading_chapter") if isinstance(item.get("reading_chapter"), int) else 10**9,
+            str(item.get("id", "")),
+        ),
+    )
+    write_json(canon_index_path, canon_index)
+    return "state/canon-index.json"
+
+
+def _upsert_knowledge_state(
+    workspace: Path,
+    *,
+    knowledge_state_id: str,
+    knowledge_subject_id: str,
+    knowledge_subject_name: str | None,
+    knowledge_object_key: str,
+    knowledge_object_phrase: str,
+    knowledge_verb: str,
+    knowledge_reading_chapter: int | None,
+    knowledge_event_id: str | None,
+    knowledge_notes: str,
+) -> str:
+    canon_index_path = workspace / "state/canon-index.json"
+    canon_index = read_json(canon_index_path, default_canon_index(workspace.name))
+    knowledge_state = None
+    for item in canon_index.setdefault("knowledge_states", []):
+        if item.get("id") == knowledge_state_id:
+            knowledge_state = item
+            break
+    if knowledge_state is None:
+        knowledge_state = {"id": knowledge_state_id}
+        canon_index.setdefault("knowledge_states", []).append(knowledge_state)
+    knowledge_state["subject_id"] = knowledge_subject_id
+    knowledge_state["subject_name"] = knowledge_subject_name
+    knowledge_state["object_key"] = knowledge_object_key
+    knowledge_state["object_phrase"] = knowledge_object_phrase
+    knowledge_state["verb"] = knowledge_verb
+    knowledge_state["reading_chapter"] = knowledge_reading_chapter
+    knowledge_state["event_id"] = knowledge_event_id
+    knowledge_state["notes"] = knowledge_notes
+    canon_index["knowledge_states"] = sorted(
+        canon_index.get("knowledge_states", []),
+        key=lambda item: (
+            item.get("reading_chapter") if isinstance(item.get("reading_chapter"), int) else 10**9,
+            str(item.get("id", "")),
+        ),
+    )
+    write_json(canon_index_path, canon_index)
+    return "state/canon-index.json"
+
+
+def _upsert_world_rule_exception(
+    workspace: Path,
+    *,
+    world_rule_exception_id: str,
+    world_rule_exception_rule_id: str,
+    world_rule_exception_rule_label: str | None,
+    world_rule_exception_subject_id: str | None,
+    world_rule_exception_subject_name: str | None,
+    world_rule_exception_object_key: str,
+    world_rule_exception_object_phrase: str,
+    world_rule_exception_reading_chapter: int | None,
+    world_rule_exception_event_id: str | None,
+    world_rule_exception_notes: str,
+) -> str:
+    canon_index_path = workspace / "state/canon-index.json"
+    canon_index = read_json(canon_index_path, default_canon_index(workspace.name))
+    exception = None
+    for item in canon_index.setdefault("world_rule_exceptions", []):
+        if item.get("id") == world_rule_exception_id:
+            exception = item
+            break
+    if exception is None:
+        exception = {"id": world_rule_exception_id}
+        canon_index.setdefault("world_rule_exceptions", []).append(exception)
+    exception["rule_id"] = world_rule_exception_rule_id
+    exception["rule_label"] = world_rule_exception_rule_label
+    exception["subject_id"] = world_rule_exception_subject_id
+    exception["subject_name"] = world_rule_exception_subject_name
+    exception["object_key"] = world_rule_exception_object_key
+    exception["object_phrase"] = world_rule_exception_object_phrase
+    exception["reading_chapter"] = world_rule_exception_reading_chapter
+    exception["event_id"] = world_rule_exception_event_id
+    exception["notes"] = world_rule_exception_notes
+    canon_index["world_rule_exceptions"] = sorted(
+        canon_index.get("world_rule_exceptions", []),
         key=lambda item: (
             item.get("reading_chapter") if isinstance(item.get("reading_chapter"), int) else 10**9,
             str(item.get("id", "")),
@@ -1211,7 +2073,14 @@ def _can_merge_input_resolve_blocked_gate(workspace: Path, idea_id: str, merge_i
         for issue in issues
         if issue.get("level") == "error" or str(issue.get("code", "")).endswith("-conflict")
     }
-    return blocking_codes == {"world-rule-conflict"}
+    resolvable_codes = {
+        str(code)
+        for code in merge_input.get("resolves_issue_codes", [])
+        if str(code).strip()
+    }
+    if not resolvable_codes and merge_input.get("source_issue_code"):
+        resolvable_codes.add(str(merge_input.get("source_issue_code")))
+    return bool(blocking_codes) and blocking_codes.issubset(resolvable_codes)
 
 
 def apply_idea_merge(
@@ -1232,6 +2101,23 @@ def apply_idea_merge(
     relationship_reading_chapter: int | None = None,
     relationship_event_id: str | None = None,
     relationship_notes: str | None = None,
+    knowledge_state_id: str | None = None,
+    knowledge_subject_id: str | None = None,
+    knowledge_subject_name: str | None = None,
+    knowledge_object_key: str | None = None,
+    knowledge_object_phrase: str | None = None,
+    knowledge_verb: str | None = None,
+    knowledge_reading_chapter: int | None = None,
+    knowledge_event_id: str | None = None,
+    knowledge_notes: str | None = None,
+    world_rule_exception_id: str | None = None,
+    world_rule_exception_subject_id: str | None = None,
+    world_rule_exception_subject_name: str | None = None,
+    world_rule_exception_object_key: str | None = None,
+    world_rule_exception_object_phrase: str | None = None,
+    world_rule_exception_reading_chapter: int | None = None,
+    world_rule_exception_event_id: str | None = None,
+    world_rule_exception_notes: str | None = None,
     character_id: str | None = None,
     character_name: str | None = None,
     character_role: str = "support",
@@ -1243,6 +2129,7 @@ def apply_idea_merge(
     reading_chapter: int | None = None,
     location: str | None = None,
     participant_ids: list[str] | None = None,
+    event_notes: str | None = None,
     chapter_number: int | None = None,
     scene_id: str | None = None,
     scene_title: str | None = None,
@@ -1250,6 +2137,7 @@ def apply_idea_merge(
     scene_status: str = "planned",
     scene_character_ids: list[str] | None = None,
     scene_event_ids: list[str] | None = None,
+    scene_notes: str | None = None,
     canon_note: str | None = None,
     outline_note: str | None = None,
 ) -> dict[str, Any]:
@@ -1272,6 +2160,23 @@ def apply_idea_merge(
     relationship_reading_chapter = _coalesce_scalar(relationship_reading_chapter, merge_apply_args.get("relationship_reading_chapter"))
     relationship_event_id = _coalesce_scalar(relationship_event_id, merge_apply_args.get("relationship_event_id"))
     relationship_notes = _coalesce_scalar(relationship_notes, merge_apply_args.get("relationship_notes"))
+    knowledge_state_id = _coalesce_scalar(knowledge_state_id, merge_apply_args.get("knowledge_state_id"))
+    knowledge_subject_id = _coalesce_scalar(knowledge_subject_id, merge_apply_args.get("knowledge_subject_id"))
+    knowledge_subject_name = _coalesce_scalar(knowledge_subject_name, merge_apply_args.get("knowledge_subject_name"))
+    knowledge_object_key = _coalesce_scalar(knowledge_object_key, merge_apply_args.get("knowledge_object_key"))
+    knowledge_object_phrase = _coalesce_scalar(knowledge_object_phrase, merge_apply_args.get("knowledge_object_phrase"))
+    knowledge_verb = _coalesce_scalar(knowledge_verb, merge_apply_args.get("knowledge_verb"))
+    knowledge_reading_chapter = _coalesce_scalar(knowledge_reading_chapter, merge_apply_args.get("knowledge_reading_chapter"))
+    knowledge_event_id = _coalesce_scalar(knowledge_event_id, merge_apply_args.get("knowledge_event_id"))
+    knowledge_notes = _coalesce_scalar(knowledge_notes, merge_apply_args.get("knowledge_notes"))
+    world_rule_exception_id = _coalesce_scalar(world_rule_exception_id, merge_apply_args.get("world_rule_exception_id"))
+    world_rule_exception_subject_id = _coalesce_scalar(world_rule_exception_subject_id, merge_apply_args.get("world_rule_exception_subject_id"))
+    world_rule_exception_subject_name = _coalesce_scalar(world_rule_exception_subject_name, merge_apply_args.get("world_rule_exception_subject_name"))
+    world_rule_exception_object_key = _coalesce_scalar(world_rule_exception_object_key, merge_apply_args.get("world_rule_exception_object_key"))
+    world_rule_exception_object_phrase = _coalesce_scalar(world_rule_exception_object_phrase, merge_apply_args.get("world_rule_exception_object_phrase"))
+    world_rule_exception_reading_chapter = _coalesce_scalar(world_rule_exception_reading_chapter, merge_apply_args.get("world_rule_exception_reading_chapter"))
+    world_rule_exception_event_id = _coalesce_scalar(world_rule_exception_event_id, merge_apply_args.get("world_rule_exception_event_id"))
+    world_rule_exception_notes = _coalesce_scalar(world_rule_exception_notes, merge_apply_args.get("world_rule_exception_notes"))
     character_id = _coalesce_scalar(character_id, merge_apply_args.get("character_id"))
     character_name = _coalesce_scalar(character_name, merge_apply_args.get("character_name"))
     character_role = _coalesce_scalar(character_role, merge_apply_args.get("character_role"), ("support",))
@@ -1283,6 +2188,7 @@ def apply_idea_merge(
     reading_chapter = _coalesce_scalar(reading_chapter, merge_apply_args.get("reading_chapter"))
     location = _coalesce_scalar(location, merge_apply_args.get("location"))
     participant_ids = _coalesce_list(participant_ids, merge_apply_args.get("participant_ids"))
+    event_notes = _coalesce_scalar(event_notes, merge_apply_args.get("event_notes"))
     chapter_number = _coalesce_scalar(chapter_number, merge_apply_args.get("chapter_number"))
     scene_id = _coalesce_scalar(scene_id, merge_apply_args.get("scene_id"))
     scene_title = _coalesce_scalar(scene_title, merge_apply_args.get("scene_title"))
@@ -1290,6 +2196,7 @@ def apply_idea_merge(
     scene_status = _coalesce_scalar(scene_status, merge_apply_args.get("scene_status"), ("planned",))
     scene_character_ids = _coalesce_list(scene_character_ids, merge_apply_args.get("scene_character_ids"))
     scene_event_ids = _coalesce_list(scene_event_ids, merge_apply_args.get("scene_event_ids"))
+    scene_notes = _coalesce_scalar(scene_notes, merge_apply_args.get("scene_notes"))
     canon_note = _coalesce_scalar(canon_note, merge_input.get("resolution_note_suggestion"))
     outline_note = _coalesce_scalar(outline_note, merge_input.get("resolution_note_suggestion"))
 
@@ -1323,6 +2230,78 @@ def apply_idea_merge(
                 f"state: {relationship_state}",
                 f"chapter: {relationship_reading_chapter if relationship_reading_chapter is not None else 'unknown'}",
                 relationship_notes or resolution_note,
+            ],
+        )
+
+    if knowledge_subject_id and knowledge_object_key:
+        actual_knowledge_state_id = knowledge_state_id or _knowledge_state_record_id(
+            knowledge_subject_id,
+            knowledge_object_key,
+            knowledge_reading_chapter if isinstance(knowledge_reading_chapter, int) else None,
+        )
+        updated_files.add(
+            _upsert_knowledge_state(
+                workspace,
+                knowledge_state_id=actual_knowledge_state_id,
+                knowledge_subject_id=knowledge_subject_id,
+                knowledge_subject_name=knowledge_subject_name,
+                knowledge_object_key=knowledge_object_key,
+                knowledge_object_phrase=knowledge_object_phrase or knowledge_object_key,
+                knowledge_verb=knowledge_verb or "知道",
+                knowledge_reading_chapter=knowledge_reading_chapter,
+                knowledge_event_id=knowledge_event_id,
+                knowledge_notes=knowledge_notes or idea.get("content", ""),
+            )
+        )
+        updated_files.add("canon/characters.md")
+        _append_markdown_block(
+            workspace / "canon/characters.md",
+            "Knowledge Log",
+            f"{idea_id} · {idea.get('title')}",
+            [
+                f"knowledge_state_id: {actual_knowledge_state_id}",
+                f"subject: {knowledge_subject_name or knowledge_subject_id}",
+                f"verb: {knowledge_verb or '知道'}",
+                f"object: {knowledge_object_phrase or knowledge_object_key}",
+                f"chapter: {knowledge_reading_chapter if knowledge_reading_chapter is not None else 'unknown'}",
+                knowledge_notes or resolution_note,
+            ],
+        )
+
+    if world_rule_exception_object_key and rule_id:
+        actual_world_rule_exception_id = world_rule_exception_id or _world_rule_exception_record_id(
+            rule_id,
+            world_rule_exception_subject_name or world_rule_exception_subject_id or "subject",
+            world_rule_exception_object_key,
+            world_rule_exception_reading_chapter if isinstance(world_rule_exception_reading_chapter, int) else None,
+        )
+        updated_files.add(
+            _upsert_world_rule_exception(
+                workspace,
+                world_rule_exception_id=actual_world_rule_exception_id,
+                world_rule_exception_rule_id=rule_id,
+                world_rule_exception_rule_label=rule_label,
+                world_rule_exception_subject_id=world_rule_exception_subject_id,
+                world_rule_exception_subject_name=world_rule_exception_subject_name,
+                world_rule_exception_object_key=world_rule_exception_object_key,
+                world_rule_exception_object_phrase=world_rule_exception_object_phrase or world_rule_exception_object_key,
+                world_rule_exception_reading_chapter=world_rule_exception_reading_chapter,
+                world_rule_exception_event_id=world_rule_exception_event_id,
+                world_rule_exception_notes=world_rule_exception_notes or resolution_note,
+            )
+        )
+        updated_files.add("canon/world-rules.md")
+        _append_markdown_block(
+            workspace / "canon/world-rules.md",
+            "Exception Log",
+            f"{idea_id} · {idea.get('title')}",
+            [
+                f"world_rule_exception_id: {actual_world_rule_exception_id}",
+                f"rule_id: {rule_id}",
+                f"subject: {world_rule_exception_subject_name or world_rule_exception_subject_id or 'unknown'}",
+                f"object: {world_rule_exception_object_phrase or world_rule_exception_object_key}",
+                f"chapter: {world_rule_exception_reading_chapter if world_rule_exception_reading_chapter is not None else 'unknown'}",
+                world_rule_exception_notes or resolution_note,
             ],
         )
 
@@ -1375,7 +2354,7 @@ def apply_idea_merge(
                 reading_chapter=reading_chapter,
                 location=location,
                 participant_ids=participant_ids or [],
-                notes=idea.get("content", ""),
+                notes=event_notes or idea.get("content", ""),
             )
         )
 
@@ -1392,7 +2371,7 @@ def apply_idea_merge(
                 scene_status=scene_status,
                 scene_character_ids=scene_character_ids or [],
                 scene_event_ids=resolved_event_ids,
-                notes=idea.get("content", ""),
+                notes=scene_notes or idea.get("content", ""),
             )
         )
         updated_files.add("outline/master-outline.md")
