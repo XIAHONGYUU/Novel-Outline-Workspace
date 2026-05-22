@@ -26,6 +26,7 @@
 - 当前 `consistency_gate`
 - intake draft 摘要
 - `timeline_merge_inputs`
+- `proposed_actions`
 - 还缺哪些结构化信息
 - 对应的 HTML 计划页路径
 
@@ -48,6 +49,53 @@
 
 - `resolves_blocked_gate` 用于标记这条 merge input 是否能在不手动 override 的前提下结构化消解原有 gate blocker
 - `apply_args` 现在既可承载 timeline / outline / relationship，也可承载 constraint rule 更新参数
+
+`proposed_actions` 现在不再只是泛化 domain 提示，而是更接近执行层的 explainer。
+
+建议字段包括：
+
+- `domain`
+- `action`
+- `summary`
+- `target_files`
+- `merge_input_id`
+- `readiness`
+- `planned_writes`
+- `source_signals`
+- `missing_fields`
+
+其中：
+
+- `merge_input_id` 用于把 domain explainer 指回某条具体 merge input
+- `readiness` 用于表示当前是 `ready / needs-info / needs-review / blocked-by-gate / planned`
+- `planned_writes` 用于把这一层准备写什么字段直接列出来
+- `source_signals` 用于说明这条 explainer 是由哪些 intake / consistency 信号驱动的
+
+当前常见策略包括：
+
+- `create-event-and-scene`
+- `update-existing-event`
+- `update-existing-scene`
+- `upsert-canon-knowledge-state`
+- `update-existing-knowledge-state`
+- `upsert-canon-relationship`
+- `update-existing-relationship`
+- `resolve-world-rule-by-delaying-event`
+- `resolve-world-rule-by-updating-cutoff`
+- `document-world-rule-exception`
+
+其中 world-rule 相关输入常会在 `apply_args` 里额外携带：
+
+- `event_notes`
+- `scene_notes`
+- `rule_id`
+- `rule_label`
+- `rule_applies_until_event_id`
+- `rule_notes`
+- `world_rule_exception_id`
+- `world_rule_exception_subject_name`
+- `world_rule_exception_object_key`
+- `world_rule_exception_reading_chapter`
 
 ## `state/intake-drafts/<idea-id>.json`
 
@@ -89,6 +137,13 @@
 - `issues[].details` 可携带具体 `record_id / existing_chapter / draft_chapter / rule_id` 等机器可消费上下文
 - `knowledge_claims` 用于记录从这条 idea 中提取出的“谁在何章知道了什么”的结构化信号
 - `patch_suggestions` 用于记录后续 merge 可直接消费的结构化修补建议
+
+对于 `world-rule conflict`，`issues[].details` 现在通常还会包含：
+
+- `rule_subject`
+- `rule_positive_token`
+- `rule_object`
+- `suggested_delay_chapter`
 
 ## `state/idea-log.json`
 
@@ -143,20 +198,55 @@
       "notes": "两人在第六章正式结盟。"
     }
   ],
+  "knowledge_states": [
+    {
+      "id": "know-char-protagonist-议会和黑潮并非同一阵营-ch3",
+      "subject_id": "char-protagonist",
+      "subject_name": "主角名",
+      "object_key": "议会和黑潮并非同一阵营",
+      "object_phrase": "议会和黑潮并非同一阵营",
+      "verb": "意识到",
+      "reading_chapter": 3,
+      "event_id": "event-white-tower-hearing",
+      "notes": "主角在第三章正式意识到两者不是一路。"
+    }
+  ],
+  "world_rule_exceptions": [
+    {
+      "id": "rulex-rule-001-主角-议会和黑潮并非同一阵营-ch3",
+      "rule_id": "rule-001",
+      "rule_label": "主角在首领身份正式揭露前不知道组织首领身份",
+      "subject_id": "char-protagonist",
+      "subject_name": "主角名",
+      "object_key": "议会和黑潮并非同一阵营",
+      "object_phrase": "议会和黑潮并非同一阵营",
+      "reading_chapter": 3,
+      "event_id": "event-white-tower-hearing",
+      "notes": "这条提前知情点作为正式例外保留。"
+    }
+  ],
   "locations": [],
   "factions": [],
   "items": []
 }
 ```
 
-其中 `relationships` 用于承载第一层正式关系事实源。
+其中：
+
+- `relationships` 用于承载第一层正式关系事实源
+- `knowledge_states` 用于承载正式知情节点
+- `world_rule_exceptions` 用于承载正式规则例外说明，供后续 consistency 直接读取
 
 建议字段包括：
 
 - `id`
-- `character_ids`
-- `state`
-- `reading_chapter`
+- `relationships[].character_ids`
+- `relationships[].state`
+- `knowledge_states[].subject_id`
+- `knowledge_states[].object_key`
+- `knowledge_states[].reading_chapter`
+- `world_rule_exceptions[].rule_id`
+- `world_rule_exceptions[].object_key`
 - `event_id`
 - `notes`
 
@@ -227,6 +317,14 @@
 
 第一版脚本只做基础存在性和引用检查，不会完整理解所有规则语义。
 但先把规则存储位置固定下来，后续容易扩展。
+
+当前 `world-rule` 的结构化 merge 允许三种常见方向：
+
+- 延后 idea 对应事件到 cutoff 之后
+- 把 `applies_until_event_id` 对齐到新事件
+- 只记录规则例外说明
+
+其中第三种默认不自动消解 gate，仍要求显式 override。
 
 ## `views/*.html`
 

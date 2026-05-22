@@ -32,7 +32,7 @@
 
 ## 当前状态
 
-到 `2026-05-13` 为止，主链路已经推进到：
+到 `2026-05-22` 为止，主链路已经推进到：
 
 `ingest -> check-consistency -> plan-merge -> apply-merge -> validate`
 
@@ -46,16 +46,41 @@
   `plan_idea_merge` 和 `apply_idea_merge` 都会显式读取 consistency gate
 - timeline merge input layer
   `plan_idea_merge` 已开始输出结构化 `timeline_merge_inputs`，`apply_idea_merge` 可直接按 `merge_input_id` 消费
+- domain-specific plan explainers
+  `plan_idea_merge` 的 `proposed_actions` 已开始输出更接近执行层的 domain explainers，而不只是泛化的 domain 提示
 - canon relationship layer
   `state/canon-index.json` 已开始承载结构化 `relationships`，关系类 merge input 可直接写入
+- canon knowledge / exception layer
+  `state/canon-index.json` 已开始承载 `knowledge_states` 与 `world_rule_exceptions`；
+  `knowledge-state` merge input 可直接写入并反向参与 consistency，
+  `world-rule exception` 记录也会进入正式机器事实源
 - world-rule resolution layer
-  `plan_idea_merge` 已可为 `world-rule conflict` 生成规则截止点对齐输入，`apply_idea_merge` 可直接执行
+  `plan_idea_merge` 已可为 `world-rule conflict` 生成多策略输入：
+  延后事件、对齐 cutoff、记录规则例外说明
+- multi-claim / multi-rule world-rule binding
+  `check_idea_consistency` 已开始在 `world-rule conflict` 中写回命中的 claim，
+  `plan_idea_merge` 可按各自命中的 claim 为不同 rule 生成独立 exception 输入
+- grouped world-rule explainers
+  当一条 idea 同时命中多条 world-rule 时，
+  `plan_idea_merge` 会先给出 constraints 级摘要，再展开每条 rule 的具体处理输入；
+  摘要中会直接列出每条 rule 的策略、目标文件、direct/override 信息，以及按 direct / review 拆开的跨 domain impacts，
+  并开始区分哪些 rule 仍在同一主体链上、哪些 exception 需要按 `split-subjects` 分开解释，
+  同一主体下若标题和正文同时抽到泛化 object 与更具体 object，claim 层会优先收敛到更具体那条，
+  多主体句子里如果前后主体对应不同 object，claim 层也会优先按主体窗口拆开，避免把后一个主体的 object 串回前一个主体，
+  `identity` family 里像“首领身份 / 组织首领是谁”这类近义 object，claim 层也开始优先保留更具体那条，
+  canon 侧 exception explainer 也会对齐到各自命中的 claim，
+  重复的 timeline / outline 说明会优先收敛成一条更高可执行性的版本
+- graph-aware consistency exemptions
+  `knowledge-state` 已开始豁免后文复述型知情记录，`relationship-history` 已开始豁免有显式状态转移后的未来重复状态
 
 下一步重点不再是补“有没有入口”，而是增强：
 
-- `knowledge-state` 检查
 - `novel-timeline-merge`
-- timeline / outline / canon 的联动质量
+- 更细的 timeline-order / knowledge-state 规则
+- 更细的 relationship / world-rule exception 边界
+- 更多 object family 的 claim 收敛
+- grouped summary 与逐条 explainer 的进一步压缩
+- repair / merge explainers 的进一步收敛
 
 ## 核心结构
 
@@ -123,6 +148,15 @@ python3 scripts/check_idea_consistency.py \
   --json
 ```
 
+为 legacy idea 补回或修复 intake draft：
+
+```bash
+python3 scripts/backfill_intake_drafts.py \
+  --workspace ./demo-workspace \
+  --all-pending \
+  --json
+```
+
 重建 HTML 展示页：
 
 ```bash
@@ -148,14 +182,37 @@ python3 scripts/apply_idea_merge.py \
   --resolution-note "按 merge input 并入第七章揭露节点。"
 ```
 
-对于 `world-rule conflict`，plan 也可能生成“更新事件并同步 rule cutoff”的结构化输入：
+对于 `world-rule conflict`，plan 现在可能生成多种结构化输入。
+
+对齐 cutoff：
 
 ```bash
 python3 scripts/apply_idea_merge.py \
   --workspace ./demo-workspace \
   --idea-id idea-20260511-001 \
-  --merge-input-id timeline-merge-rule-001 \
+  --merge-input-id timeline-merge-rule-cutoff-002 \
   --resolution-note "把揭露事件与硬约束截止点对齐。"
+```
+
+延后事件到 cutoff 之后：
+
+```bash
+python3 scripts/apply_idea_merge.py \
+  --workspace ./demo-workspace \
+  --idea-id idea-20260511-001 \
+  --merge-input-id timeline-merge-rule-delay-001 \
+  --resolution-note "把揭露事件延后到硬约束之后。"
+```
+
+只记录规则例外说明：
+
+```bash
+python3 scripts/apply_idea_merge.py \
+  --workspace ./demo-workspace \
+  --idea-id idea-20260511-001 \
+  --merge-input-id timeline-merge-rule-note-003 \
+  --resolution-note "先把这条例外写入 constraints 说明。" \
+  --override-consistency-gate
 ```
 
 应用一条结构化 merge：

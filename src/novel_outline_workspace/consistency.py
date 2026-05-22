@@ -9,6 +9,7 @@ from .workspace import (
     _html_page,
     _load_scene_records,
     _safe,
+    default_canon_index,
     now_iso,
     read_json,
     write_json,
@@ -43,6 +44,30 @@ FIRST_KNOWLEDGE_TOKENS = (
     "才发现",
 )
 KNOWLEDGE_PREFIX_TOKENS = ("原来", "其实", "已经", "也", "还", "就", "才", "终于", "开始", "逐渐")
+KNOWLEDGE_RECAP_TOKENS = ("再次", "重新", "又", "已经", "早已", "早就")
+RELATIONSHIP_REPEAT_TOKENS = ("重新", "再次", "又")
+KNOWLEDGE_OBJECT_GENERIC_SUFFIXES = ("真相", "秘密", "消息", "一事", "这件事", "这回事")
+KNOWLEDGE_OBJECT_CANONICAL_REPLACEMENTS = (
+    ("并不是", "不是"),
+    ("并非", "不是"),
+    ("不是一路人", "不是同阵营"),
+    ("不是一路", "不是同阵营"),
+    ("不是一伙人", "不是同阵营"),
+    ("不是一伙", "不是同阵营"),
+    ("不是同一阵营", "不是同阵营"),
+    ("同一阵营", "同阵营"),
+    ("一路人", "同阵营"),
+    ("一路", "同阵营"),
+    ("一伙人", "同阵营"),
+    ("一伙", "同阵营"),
+    ("同伙", "同阵营"),
+    ("真正身份", "身份"),
+    ("真实身份", "身份"),
+    ("真身", "身份"),
+    ("是谁", "身份"),
+    ("有内鬼", "泄密"),
+    ("内鬼", "泄密"),
+)
 
 
 def _report_path_for(workspace: Path, idea_id: str) -> Path:
@@ -205,14 +230,210 @@ def _knowledge_shingles(text: str, size: int = 2) -> set[str]:
     return {text[index : index + size] for index in range(len(text) - size + 1)}
 
 
-def _knowledge_objects_match(left: str, right: str) -> bool:
+def _title_keys_match(left: str, right: str) -> bool:
     if not left or not right:
         return False
     if left == right:
         return True
-    if min(len(left), len(right)) >= 4 and (left in right or right in left):
+    return min(len(left), len(right)) >= 4 and (left in right or right in left)
+
+
+def _canonicalize_knowledge_match_text(text: str) -> str:
+    normalized = _normalize_text(text)
+    for source, target in KNOWLEDGE_OBJECT_CANONICAL_REPLACEMENTS:
+        normalized = normalized.replace(_normalize_text(source), _normalize_text(target))
+    return normalized
+
+
+def _knowledge_object_signature(text: str) -> tuple[str, tuple[str, ...]] | None:
+    normalized = _canonicalize_knowledge_match_text(text)
+    if not normalized:
+        return None
+
+    for relation_token, family in (("不是同阵营", "separate-camp"), ("同阵营", "same-camp")):
+        if relation_token not in normalized:
+            continue
+        prefix = normalized.split(relation_token, 1)[0]
+        parts = [part.strip("的") for part in re.split(r"[和与跟及]", prefix) if part.strip("的")]
+        if len(parts) >= 2:
+            return family, tuple(sorted(parts))
+
+    if normalized.endswith("身份"):
+        subject = normalized[: -len("身份")].rstrip("的")
+        if len(subject) >= 2:
+            return "identity", (subject,)
+
+    if normalized.endswith("泄密"):
+        subject = re.sub(r"(?:有人|有)$", "", normalized[: -len("泄密")]).rstrip("的")
+        if len(subject) >= 2:
+            return "leak", (subject,)
+
+    return None
+
+
+def _knowledge_object_tail_family(text: str) -> str | None:
+    normalized = _canonicalize_knowledge_match_text(text)
+    if not normalized:
+        return None
+    if normalized.endswith("不是同阵营"):
+        return "separate-camp"
+    if normalized.endswith("同阵营"):
+        return "same-camp"
+    if normalized.endswith("身份"):
+        return "identity"
+    if normalized.endswith("泄密"):
+        return "leak"
+    return None
+
+
+def _knowledge_object_family_core(text: str) -> str:
+    normalized = _canonicalize_knowledge_match_text(text)
+    if not normalized:
+        return ""
+    updated = normalized
+    changed = True
+    while changed:
+        changed = False
+        for suffix in KNOWLEDGE_OBJECT_GENERIC_SUFFIXES:
+            normalized_suffix = _normalize_text(suffix)
+            if updated.endswith(normalized_suffix) and len(updated) > len(normalized_suffix) + 1:
+                updated = updated[: -len(normalized_suffix)]
+                changed = True
+                break
+    return updated
+
+
+def _knowledge_object_claim_family_signature(text: str) -> tuple[str, str] | None:
+    core = _knowledge_object_family_core(text)
+    family = _knowledge_object_tail_family(core)
+    if not family or not core:
+        return None
+    family_suffix = {
+        "identity": "身份",
+        "leak": "泄密",
+        "same-camp": "同阵营",
+        "separate-camp": "不是同阵营",
+    }.get(family, "")
+    base = core[: -len(family_suffix)] if family_suffix and core.endswith(family_suffix) else core
+    return family, base.strip("的")
+
+
+def _is_generic_knowledge_object_for_claim_dedupe(text: str) -> bool:
+    core = _knowledge_object_family_core(text)
+    family = _knowledge_object_tail_family(core)
+    return bool(family and core in {"身份", "泄密", "同阵营", "不是同阵营"})
+
+
+def _knowledge_object_claim_specificity(text: str) -> tuple[int, int]:
+    signature = _knowledge_object_claim_family_signature(text)
+    family_base = signature[1] if signature else ""
+    normalized = _canonicalize_knowledge_match_text(text)
+    return (len(family_base), len(normalized))
+
+
+def _dedupe_subject_knowledge_claims(claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    for claim in claims:
+        candidate_key = str(claim.get("object_key") or claim.get("object_phrase") or "")
+        merged = False
+        for index, existing in enumerate(deduped):
+            if str(existing.get("subject_id") or "") != str(claim.get("subject_id") or ""):
+                continue
+            existing_key = str(existing.get("object_key") or existing.get("object_phrase") or "")
+            if _knowledge_objects_match(existing_key, candidate_key):
+                if _knowledge_object_claim_specificity(candidate_key) > _knowledge_object_claim_specificity(existing_key):
+                    deduped[index] = claim
+                merged = True
+                break
+
+            existing_signature = _knowledge_object_claim_family_signature(existing_key)
+            candidate_signature = _knowledge_object_claim_family_signature(candidate_key)
+            if not existing_signature or existing_signature[0] != (candidate_signature or ("", ""))[0]:
+                continue
+            existing_core = _knowledge_object_family_core(existing_key)
+            candidate_core = _knowledge_object_family_core(candidate_key)
+            existing_family = existing_signature[0]
+            candidate_family = candidate_signature[0]
+            if _is_generic_knowledge_object_for_claim_dedupe(existing_key) and candidate_core != existing_core:
+                deduped[index] = claim
+                merged = True
+                break
+            if _is_generic_knowledge_object_for_claim_dedupe(candidate_key) and existing_core != candidate_core:
+                merged = True
+                break
+            existing_base = existing_signature[1]
+            candidate_base = candidate_signature[1]
+            if existing_base and candidate_base and (
+                existing_base in candidate_base or candidate_base in existing_base
+            ):
+                if _knowledge_object_claim_specificity(candidate_key) > _knowledge_object_claim_specificity(existing_key):
+                    deduped[index] = claim
+                merged = True
+                break
+        if not merged:
+            deduped.append(claim)
+    return deduped
+
+
+def _shared_knowledge_object_residuals(left: str, right: str) -> tuple[str, str]:
+    prefix_length = 0
+    while prefix_length < min(len(left), len(right)) and left[prefix_length] == right[prefix_length]:
+        prefix_length += 1
+
+    suffix_length = 0
+    left_limit = len(left) - prefix_length
+    right_limit = len(right) - prefix_length
+    while suffix_length < min(left_limit, right_limit) and left[-(suffix_length + 1)] == right[-(suffix_length + 1)]:
+        suffix_length += 1
+
+    left_end = len(left) - suffix_length if suffix_length else len(left)
+    right_end = len(right) - suffix_length if suffix_length else len(right)
+    left_residual = left[prefix_length:left_end].strip("的")
+    right_residual = right[prefix_length:right_end].strip("的")
+    return left_residual, right_residual
+
+
+def _knowledge_objects_match(left: str, right: str) -> bool:
+    left_normalized = _canonicalize_knowledge_match_text(left)
+    right_normalized = _canonicalize_knowledge_match_text(right)
+    if not left_normalized or not right_normalized:
+        return False
+    if left_normalized == right_normalized:
         return True
-    return len(_knowledge_shingles(left) & _knowledge_shingles(right)) >= 2
+
+    left_signature = _knowledge_object_signature(left_normalized)
+    right_signature = _knowledge_object_signature(right_normalized)
+    if left_signature or right_signature:
+        return left_signature is not None and left_signature == right_signature
+
+    if min(len(left_normalized), len(right_normalized)) >= 4 and (
+        left_normalized in right_normalized or right_normalized in left_normalized
+    ):
+        return True
+
+    left_residual, right_residual = _shared_knowledge_object_residuals(left_normalized, right_normalized)
+    if left_residual or right_residual:
+        if not left_residual or not right_residual:
+            return True
+        if left_residual == right_residual:
+            return True
+        left_family = _knowledge_object_tail_family(left_residual)
+        right_family = _knowledge_object_tail_family(right_residual)
+        if left_family and left_family == right_family:
+            return True
+        return False
+
+    overlap = len(_knowledge_shingles(left_normalized) & _knowledge_shingles(right_normalized))
+    min_shingles = min(len(_knowledge_shingles(left_normalized)), len(_knowledge_shingles(right_normalized)))
+    return min_shingles >= 4 and overlap >= min_shingles - 1
+
+
+def _knowledge_record_priority(record_type: str) -> int:
+    if record_type == "canon-knowledge-state":
+        return 2
+    if record_type == "event":
+        return 1
+    return 0
 
 
 def _extract_knowledge_signals(text: str, removable_terms: list[str] | None = None) -> list[dict[str, Any]]:
@@ -227,6 +448,7 @@ def _extract_knowledge_signals(text: str, removable_terms: list[str] | None = No
                 break
             object_phrase = _trim_knowledge_object(source[index + len(verb) :], removable_terms)
             object_key = _normalize_knowledge_object(object_phrase, removable_terms)
+            prefix_window = source[max(0, index - 4) : index]
             key = (verb, object_key)
             if object_key and key not in seen:
                 seen.add(key)
@@ -235,10 +457,42 @@ def _extract_knowledge_signals(text: str, removable_terms: list[str] | None = No
                         "verb": verb,
                         "object_phrase": object_phrase,
                         "object_key": object_key,
+                        "is_recap": any(token in prefix_window for token in KNOWLEDGE_RECAP_TOKENS),
                     }
                 )
             start = index + len(verb)
     return signals
+
+
+def _subject_window_end(
+    haystack: str,
+    subject_index: int,
+    subject_length: int,
+    all_subject_terms: list[str],
+) -> int:
+    default_end = min(len(haystack), subject_index + 96)
+    search_start = subject_index + max(subject_length, 1)
+    next_subject_indexes = sorted(
+        {
+            haystack.find(term, search_start)
+            for term in all_subject_terms
+            if term and haystack.find(term, search_start) >= 0
+        }
+    )
+    if not next_subject_indexes:
+        return default_end
+    first_verb_indexes = [
+        haystack.find(verb, search_start, default_end)
+        for verb in KNOWLEDGE_STATE_TOKENS
+        if haystack.find(verb, search_start, default_end) >= 0
+    ]
+    if not first_verb_indexes:
+        return min(default_end, next_subject_indexes[0])
+    first_verb_index = min(first_verb_indexes)
+    first_next_subject_index = next_subject_indexes[0]
+    if first_next_subject_index < first_verb_index:
+        return default_end
+    return min(default_end, first_next_subject_index)
 
 
 def _extract_draft_knowledge_claims(
@@ -252,6 +506,12 @@ def _extract_draft_knowledge_claims(
         return []
 
     haystack = f"{draft.get('title', '')}\n{draft.get('content', '')}"
+    all_subject_terms = [
+        term
+        for char_id in resolved_character_ids
+        for term in (character_terms_by_id.get(char_id) or [id_to_name.get(char_id, char_id)])
+        if str(term).strip()
+    ]
     claims: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     first_claim = any(token in haystack for token in FIRST_KNOWLEDGE_TOKENS)
@@ -265,28 +525,37 @@ def _extract_draft_knowledge_claims(
                 subject_index = haystack.find(term, start)
                 if subject_index < 0:
                     break
-                window = haystack[subject_index : subject_index + 96]
+                window_end = _subject_window_end(haystack, subject_index, len(term), all_subject_terms)
+                window = haystack[subject_index:window_end]
                 for verb in KNOWLEDGE_STATE_TOKENS:
-                    verb_index = window.find(verb, len(term))
-                    if verb_index < 0 or verb_index - len(term) > 24:
-                        continue
-                    object_phrase = _trim_knowledge_object(window[verb_index + len(verb) :], terms)
-                    object_key = _normalize_knowledge_object(object_phrase, terms)
-                    key = (char_id, object_key)
-                    if object_key and key not in seen:
-                        seen.add(key)
-                        claims.append(
-                            {
-                                "subject_id": char_id,
-                                "subject_name": id_to_name.get(char_id, char_id),
-                                "verb": verb,
-                                "object_phrase": object_phrase,
-                                "object_key": object_key,
-                                "chapter": draft_chapter,
-                                "first_claim": first_claim,
-                            }
-                        )
-                        matched = True
+                    verb_start = len(term)
+                    while True:
+                        verb_index = window.find(verb, verb_start)
+                        if verb_index < 0:
+                            break
+                        if verb_index - len(term) > 24 and matched:
+                            break
+                        if verb_index - len(term) > 24:
+                            verb_start = verb_index + len(verb)
+                            continue
+                        object_phrase = _trim_knowledge_object(window[verb_index + len(verb) :], terms)
+                        object_key = _normalize_knowledge_object(object_phrase, terms)
+                        key = (char_id, object_key)
+                        if object_key and key not in seen:
+                            seen.add(key)
+                            claims.append(
+                                {
+                                    "subject_id": char_id,
+                                    "subject_name": id_to_name.get(char_id, char_id),
+                                    "verb": verb,
+                                    "object_phrase": object_phrase,
+                                    "object_key": object_key,
+                                    "chapter": draft_chapter,
+                                    "first_claim": first_claim,
+                                }
+                            )
+                            matched = True
+                        verb_start = verb_index + len(verb)
                 start = subject_index + len(term)
         if matched:
             continue
@@ -307,7 +576,7 @@ def _extract_draft_knowledge_claims(
                             "first_claim": first_claim,
                         }
                     )
-    return claims
+    return _dedupe_subject_knowledge_claims(claims)
 
 
 def _check_title_based_conflicts(
@@ -327,7 +596,7 @@ def _check_title_based_conflicts(
 
     for event in events:
         event_label = _normalize_text(event.get("label") or event.get("id"))
-        if event_label not in title_keys:
+        if not any(_title_keys_match(title_key, event_label) for title_key in title_keys):
             continue
         existing_chapter = event.get("reading_chapter")
         if draft_chapter is not None and isinstance(existing_chapter, int) and existing_chapter != draft_chapter:
@@ -364,7 +633,7 @@ def _check_title_based_conflicts(
     for record in scene_records:
         scene = record["scene"]
         scene_title = _normalize_text(scene.get("title") or scene.get("id"))
-        if scene_title not in title_keys:
+        if not any(_title_keys_match(title_key, scene_title) for title_key in title_keys):
             continue
         existing_chapter = record.get("chapter")
         if draft_chapter is not None and isinstance(existing_chapter, int) and existing_chapter != draft_chapter:
@@ -386,6 +655,7 @@ def _check_title_based_conflicts(
 
 def _check_knowledge_state_conflicts(
     knowledge_claims: list[dict[str, Any]],
+    canon_index: dict[str, Any],
     character_terms_by_id: dict[str, list[str]],
     events: list[dict[str, Any]],
     scene_records: list[dict[str, Any]],
@@ -418,41 +688,81 @@ def _check_knowledge_state_conflicts(
                 "text": f"{scene.get('title', '')}\n{scene.get('notes', '')}",
             }
         )
+    for knowledge_state in canon_index.get("knowledge_states", []):
+        subject_id = str(knowledge_state.get("subject_id") or "").strip()
+        object_key = str(knowledge_state.get("object_key") or "").strip()
+        if not subject_id or not object_key:
+            continue
+        records.append(
+            {
+                "record_type": "canon-knowledge-state",
+                "record_id": knowledge_state.get("id"),
+                "chapter": knowledge_state.get("reading_chapter"),
+                "participants": {subject_id},
+                "path": "state/canon-index.json",
+                "text": "",
+                "signal": {
+                    "verb": str(knowledge_state.get("verb") or "知道"),
+                    "object_phrase": str(knowledge_state.get("object_phrase") or object_key),
+                    "object_key": object_key,
+                    "is_recap": False,
+                },
+            }
+        )
 
-    seen: set[tuple[str, str, str, str, str]] = set()
     for claim in knowledge_claims:
         subject_id = claim["subject_id"]
         subject_name = claim["subject_name"]
+        if any(
+            str(item.get("subject_id") or "").strip() == subject_id
+            and str(item.get("object_key") or "").strip() == str(claim.get("object_key") or "").strip()
+            and item.get("reading_chapter") == claim["chapter"]
+            for item in canon_index.get("knowledge_states", [])
+        ):
+            continue
         terms = character_terms_by_id.get(subject_id) or [subject_name]
+        prior_matches: list[dict[str, Any]] = []
+        future_matches: list[dict[str, Any]] = []
         for record in records:
             record_chapter = record.get("chapter")
             if subject_id not in record["participants"] or not isinstance(record_chapter, int):
                 continue
             if record_chapter == claim["chapter"]:
                 continue
-            signals = _extract_knowledge_signals(str(record.get("text") or ""), terms)
-            matched_signal = next(
-                (signal for signal in signals if _knowledge_objects_match(claim["object_key"], signal["object_key"])),
-                None,
-            )
+            if record.get("record_type") == "canon-knowledge-state":
+                signal = record.get("signal", {})
+                matched_signal = signal if _knowledge_objects_match(claim["object_key"], str(signal.get("object_key") or "")) else None
+            else:
+                signals = _extract_knowledge_signals(str(record.get("text") or ""), terms)
+                matched_signal = next(
+                    (signal for signal in signals if _knowledge_objects_match(claim["object_key"], signal["object_key"])),
+                    None,
+                )
             if matched_signal is None:
                 continue
-            direction = "already-known-earlier" if record_chapter < claim["chapter"] else "knowledge-advance"
-            issue_key = (subject_id, claim["object_key"], str(record["record_type"]), str(record["record_id"]), direction)
-            if issue_key in seen:
-                continue
-            seen.add(issue_key)
-            if direction == "already-known-earlier":
-                qualifier = "首次" if claim["first_claim"] else "关键"
-                message = (
-                    f"角色 `{subject_name}` 在 {record['record_type']} `{record['record_id']}` 第 {record_chapter} 章已经出现 "
-                    f"`{matched_signal['object_phrase']}` 的知情记录；这条 idea 又把{qualifier}知情点放到第 {claim['chapter']} 章。"
-                )
+            candidate = {"record": record, "signal": matched_signal}
+            if record_chapter < claim["chapter"]:
+                prior_matches.append(candidate)
             else:
-                message = (
-                    f"角色 `{subject_name}` 关于 `{matched_signal['object_phrase']}` 的正式知情记录目前在 "
-                    f"{record['record_type']} `{record['record_id']}` 第 {record_chapter} 章，这条 idea 试图前移到第 {claim['chapter']} 章。"
-                )
+                future_matches.append(candidate)
+
+        if prior_matches:
+            prior_match = max(
+                prior_matches,
+                key=lambda item: (
+                    int(item["record"]["chapter"]),
+                    _knowledge_record_priority(str(item["record"]["record_type"])),
+                    str(item["record"]["record_id"]),
+                ),
+            )
+            record = prior_match["record"]
+            matched_signal = prior_match["signal"]
+            record_chapter = int(record["chapter"])
+            qualifier = "首次" if claim["first_claim"] else "关键"
+            message = (
+                f"角色 `{subject_name}` 在 {record['record_type']} `{record['record_id']}` 第 {record_chapter} 章已经出现 "
+                f"`{matched_signal['object_phrase']}` 的知情记录；这条 idea 又把{qualifier}知情点放到第 {claim['chapter']} 章。"
+            )
             _append_issue(
                 issues,
                 "warning",
@@ -467,11 +777,50 @@ def _check_knowledge_state_conflicts(
                     "draft_chapter": claim["chapter"],
                     "existing_chapter": record_chapter,
                     "knowledge_object": matched_signal["object_phrase"],
-                    "direction": direction,
+                    "direction": "already-known-earlier",
                     "claim_verb": claim["verb"],
                     "record_verb": matched_signal["verb"],
                 },
             )
+            continue
+
+        non_recap_future_matches = [item for item in future_matches if not item["signal"].get("is_recap")]
+        if not non_recap_future_matches:
+            continue
+        future_match = min(
+            non_recap_future_matches,
+            key=lambda item: (
+                int(item["record"]["chapter"]),
+                -_knowledge_record_priority(str(item["record"]["record_type"])),
+                str(item["record"]["record_id"]),
+            ),
+        )
+        record = future_match["record"]
+        matched_signal = future_match["signal"]
+        record_chapter = int(record["chapter"])
+        message = (
+            f"角色 `{subject_name}` 关于 `{matched_signal['object_phrase']}` 的正式知情记录目前在 "
+            f"{record['record_type']} `{record['record_id']}` 第 {record_chapter} 章，这条 idea 试图前移到第 {claim['chapter']} 章。"
+        )
+        _append_issue(
+            issues,
+            "warning",
+            "knowledge-state-conflict",
+            message,
+            str(record["path"]),
+            {
+                "subject_id": subject_id,
+                "subject_name": subject_name,
+                "record_type": record["record_type"],
+                "record_id": record["record_id"],
+                "draft_chapter": claim["chapter"],
+                "existing_chapter": record_chapter,
+                "knowledge_object": matched_signal["object_phrase"],
+                "direction": "knowledge-advance",
+                "claim_verb": claim["verb"],
+                "record_verb": matched_signal["verb"],
+            },
+        )
 
 
 def _check_first_meeting_conflicts(
@@ -545,6 +894,11 @@ def _relationship_state_from_token(token: str | None) -> str | None:
     if not token:
         return None
     return RELATIONSHIP_TOKEN_TO_STATE.get(token)
+
+
+def _has_relationship_repeat_hint(text: str) -> bool:
+    haystack = str(text or "")
+    return any(token in haystack for token in RELATIONSHIP_REPEAT_TOKENS)
 
 
 def _relationship_history(
@@ -646,6 +1000,7 @@ def _check_relationship_history_conflicts(
     target_set = set(resolved_character_ids)
     pair_label = " / ".join(id_to_name.get(char_id, char_id) for char_id in resolved_character_ids)
     relationship_history = _relationship_history(canon_index, target_set, events, scene_records)
+    repeat_hint = _has_relationship_repeat_hint(haystack)
 
     if draft_chapter is not None and any(token in haystack for token in UNFAMILIAR_RELATION_TOKENS):
         for beat in relationship_history:
@@ -718,6 +1073,13 @@ def _check_relationship_history_conflicts(
             return
 
     if earliest_future_same is not None:
+        if latest_prior_same is not None and repeat_hint and _has_intervening_relationship_transition(
+            relationship_history,
+            from_chapter=int(latest_prior_same["chapter"]),
+            to_chapter=int(earliest_future_same["chapter"]),
+            relationship_state=relationship_state,
+        ):
+            return
         _append_issue(
             issues,
             "warning",
@@ -760,11 +1122,96 @@ def _extract_rule_requirement(rule_label: str, canon_index: dict[str, Any]) -> t
     return None
 
 
+def _rule_subject_id(rule_subject: str, canon_index: dict[str, Any]) -> str | None:
+    token_to_id, _ = _character_lookup(canon_index)
+    return token_to_id.get(_normalize_text(rule_subject))
+
+
+def _subject_matches_rule(
+    *,
+    subject_id: Any,
+    subject_name: Any,
+    rule_subject: str,
+    rule_subject_id: str | None,
+) -> bool:
+    normalized_rule_subject = _normalize_text(rule_subject)
+    if rule_subject_id and str(subject_id or "").strip() == rule_subject_id:
+        return True
+    return _normalize_text(subject_name) == normalized_rule_subject
+
+
+def _claim_matches_world_rule(
+    claim: dict[str, Any],
+    *,
+    rule_subject: str,
+    rule_subject_id: str | None,
+    rule_object: str,
+) -> bool:
+    return _subject_matches_rule(
+        subject_id=claim.get("subject_id"),
+        subject_name=claim.get("subject_name"),
+        rule_subject=rule_subject,
+        rule_subject_id=rule_subject_id,
+    ) and _knowledge_objects_match(
+        str(claim.get("object_key") or claim.get("object_phrase") or ""),
+        rule_object,
+    )
+
+
+def _has_matching_world_rule_exception(
+    canon_index: dict[str, Any],
+    *,
+    rule_id: str,
+    draft_chapter: int,
+    normalized_haystack: str,
+    knowledge_claims: list[dict[str, Any]],
+    rule_subject: str,
+    rule_object: str,
+) -> bool:
+    rule_subject_id = _rule_subject_id(rule_subject, canon_index)
+    for exception in canon_index.get("world_rule_exceptions", []):
+        if str(exception.get("rule_id") or "").strip() != rule_id:
+            continue
+        exception_chapter = exception.get("reading_chapter")
+        if isinstance(exception_chapter, int) and draft_chapter < exception_chapter:
+            continue
+        exception_subject_matches_rule = _subject_matches_rule(
+            subject_id=exception.get("subject_id"),
+            subject_name=exception.get("subject_name"),
+            rule_subject=rule_subject,
+            rule_subject_id=rule_subject_id,
+        )
+        if not exception_subject_matches_rule:
+            continue
+        exception_object = str(exception.get("object_key") or exception.get("object_phrase") or "")
+        if knowledge_claims:
+            if any(
+                _claim_matches_world_rule(
+                    claim,
+                    rule_subject=rule_subject,
+                    rule_subject_id=rule_subject_id,
+                    rule_object=exception_object,
+                )
+                for claim in knowledge_claims
+            ):
+                return True
+            continue
+        subject_name = _normalize_text(exception.get("subject_name") or "")
+        object_key = _normalize_text(exception_object)
+        if subject_name and subject_name not in normalized_haystack:
+            continue
+        if object_key and object_key not in normalized_haystack:
+            continue
+        return True
+    return False
+
+
 def _check_world_rule_conflicts(
     draft: dict[str, Any],
     workspace: Path,
     canon_index: dict[str, Any],
     events: list[dict[str, Any]],
+    knowledge_claims: list[dict[str, Any]],
     issues: list[dict[str, Any]],
 ) -> None:
     draft_chapter = _primary_chapter_hint(draft)
@@ -784,9 +1231,31 @@ def _check_world_rule_conflicts(
         if not keyword_info or not isinstance(cutoff_chapter, int):
             continue
         subject_key, positive_token, object_key = keyword_info
-        subject_hit = _normalize_text(subject_key) in normalized_haystack
-        object_hit = _normalize_text(object_key) in normalized_haystack
-        positive_hit = (not positive_token) or (_normalize_text(positive_token) in normalized_haystack)
+        rule_subject_id = _rule_subject_id(subject_key, canon_index)
+        matching_claims = [
+            claim
+            for claim in knowledge_claims
+            if _claim_matches_world_rule(
+                claim,
+                rule_subject=subject_key,
+                rule_subject_id=rule_subject_id,
+                rule_object=object_key,
+            )
+        ]
+        matched_claim = matching_claims[0] if matching_claims else {}
+        subject_hit = bool(matching_claims) or (_normalize_text(subject_key) in normalized_haystack)
+        object_hit = bool(matching_claims) or (_normalize_text(object_key) in normalized_haystack)
+        positive_hit = bool(matching_claims) or (not positive_token) or (_normalize_text(positive_token) in normalized_haystack)
+        if _has_matching_world_rule_exception(
+            canon_index,
+            rule_id=str(rule.get("id") or ""),
+            draft_chapter=draft_chapter,
+            normalized_haystack=normalized_haystack,
+            knowledge_claims=matching_claims,
+            rule_subject=subject_key,
+            rule_object=object_key,
+        ):
+            continue
         if subject_hit and object_hit and positive_hit and draft_chapter <= cutoff_chapter:
             _append_issue(
                 issues,
@@ -797,9 +1266,17 @@ def _check_world_rule_conflicts(
                 {
                     "rule_id": rule.get("id"),
                     "rule_label": rule.get("label"),
+                    "rule_subject": subject_key,
+                    "rule_positive_token": positive_token,
+                    "rule_object": object_key,
                     "cutoff_event_id": rule.get("applies_until_event_id"),
                     "cutoff_chapter": cutoff_chapter,
                     "draft_chapter": draft_chapter,
+                    "suggested_delay_chapter": cutoff_chapter + 1,
+                    "matched_claim_subject_id": matched_claim.get("subject_id"),
+                    "matched_claim_subject_name": matched_claim.get("subject_name"),
+                    "matched_claim_object_key": matched_claim.get("object_key"),
+                    "matched_claim_object_phrase": matched_claim.get("object_phrase"),
                 },
             )
 
@@ -809,7 +1286,7 @@ def _issue_target_files(issue: dict[str, Any]) -> list[str]:
     if code == "location-continuity-conflict":
         return ["timeline/events.json"]
     if code == "world-rule-conflict":
-        return ["constraints/constraints.json", "timeline/events.json", "outline/scene-index.json"]
+        return ["state/canon-index.json", "constraints/constraints.json", "timeline/events.json", "outline/scene-index.json"]
     if code in {"knowledge-state-conflict", "timeline-order-conflict"}:
         return ["timeline/events.json", "outline/scene-index.json"]
     if code in {"first-meeting-conflict", "relationship-history-conflict"}:
@@ -861,18 +1338,34 @@ def _build_patch_suggestion(issue: dict[str, Any]) -> dict[str, Any]:
         priority = "medium"
     elif code == "world-rule-conflict":
         summary = (
-            f"这条 idea 早于硬约束 `{details.get('rule_id')}` 的截止点；要么把知识点延后到第 {details.get('cutoff_chapter')} 章之后，"
-            "要么明确修改约束。"
+            f"这条 idea 早于硬约束 `{details.get('rule_id')}` 的截止点；可以延后事件到第 {details.get('suggested_delay_chapter')} 章，"
+            "对齐 cutoff，或补一条显式规则说明。"
         )
         actions = [
             {
-                "type": "delay-or-amend-rule",
+                "type": "delay-event-past-cutoff",
                 "path": issue.get("path"),
                 "rule_id": details.get("rule_id"),
                 "cutoff_event_id": details.get("cutoff_event_id"),
                 "cutoff_chapter": details.get("cutoff_chapter"),
                 "draft_chapter": details.get("draft_chapter"),
-            }
+                "target_chapter": details.get("suggested_delay_chapter"),
+            },
+            {
+                "type": "align-rule-cutoff-to-draft-event",
+                "path": issue.get("path"),
+                "rule_id": details.get("rule_id"),
+                "cutoff_event_id": details.get("cutoff_event_id"),
+                "draft_chapter": details.get("draft_chapter"),
+            },
+            {
+                "type": "document-rule-exception",
+                "path": issue.get("path"),
+                "rule_id": details.get("rule_id"),
+                "rule_subject": details.get("rule_subject"),
+                "rule_object": details.get("rule_object"),
+                "draft_chapter": details.get("draft_chapter"),
+            },
         ]
         priority = "high"
     elif code == "first-meeting-conflict":
@@ -1044,7 +1537,7 @@ def check_idea_consistency(workspace: Path, idea_id: str) -> dict[str, Any]:
     draft.setdefault("kind", idea.get("kind"))
     draft.setdefault("content", idea.get("content"))
 
-    canon_index = read_json(workspace / "state/canon-index.json", {"characters": [], "locations": []})
+    canon_index = read_json(workspace / "state/canon-index.json", default_canon_index(workspace.name))
     events = read_json(workspace / "timeline/events.json", {"events": []}).get("events", [])
     scene_records = _load_scene_records(workspace)
     _, id_to_name = _character_lookup(canon_index)
@@ -1054,10 +1547,10 @@ def check_idea_consistency(workspace: Path, idea_id: str) -> dict[str, Any]:
     resolved_character_ids = _resolve_character_mentions(draft, canon_index, issues)
     knowledge_claims = _extract_draft_knowledge_claims(draft, resolved_character_ids, character_terms_by_id, id_to_name)
     _check_title_based_conflicts(draft, events, scene_records, issues)
-    _check_knowledge_state_conflicts(knowledge_claims, character_terms_by_id, events, scene_records, issues)
+    _check_knowledge_state_conflicts(knowledge_claims, canon_index, character_terms_by_id, events, scene_records, issues)
     _check_first_meeting_conflicts(draft, resolved_character_ids, id_to_name, events, scene_records, issues)
     _check_relationship_history_conflicts(draft, canon_index, resolved_character_ids, id_to_name, events, scene_records, issues)
-    _check_world_rule_conflicts(draft, workspace, canon_index, events, issues)
+    _check_world_rule_conflicts(draft, workspace, canon_index, events, knowledge_claims, issues)
 
     error_count = sum(1 for issue in issues if issue.get("level") == "error")
     warning_count = sum(1 for issue in issues if issue.get("level") == "warning")

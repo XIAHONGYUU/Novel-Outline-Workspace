@@ -30,6 +30,7 @@
 - `init_workspace.py`
 - `refresh_workspace_status.py`
 - `ingest_idea.py`
+- `backfill_intake_drafts.py`
 - `validate_workspace.py`
 - `plan_idea_merge.py`
 - `apply_idea_merge.py`
@@ -43,6 +44,7 @@
 - JSON 读写
 - 状态汇总
 - idea log 更新
+- intake backfill / repair
 - merge planning
 - merge application
 - orchestration routing

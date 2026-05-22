@@ -289,3 +289,275 @@
 - 这条路径能最短闭环接上现有 `plan/apply`
 - 相比直接 override，更接近结构化修复
 - 后续可以在不推翻接口的前提下继续增加“延后事件”或“改单条 rule 说明”等分支
+
+---
+
+## 2026-05-21
+
+### 决策：`world-rule conflict` 改为多策略 merge input，而不是只保留 cutoff 对齐
+
+当前状态：
+
+- `world-rule conflict` 已能稳定产出 issue 和 `patch_suggestions`
+- 单一路径的 cutoff 对齐已经不够覆盖真实 merge 选择
+
+因此本轮把结构化输入扩成三类：
+
+- `resolve-world-rule-by-delaying-event`
+- `resolve-world-rule-by-updating-cutoff`
+- `document-world-rule-exception`
+
+其中：
+
+- 前两类允许在仅有 `world-rule conflict` 时直接结构化解 gate
+- 只记录规则说明的路径明确保留 `override` 要求
+
+原因：
+
+- 同一类冲突至少存在“改事件”与“改规则”两种方向
+- 不是所有规则说明修改都应被系统装作已经自动消解 gate
+- 先把策略层显式化，后续再继续丰富 explainers 和选择逻辑
+
+---
+
+## 2026-05-22
+
+### 决策：多条 `world-rule` 冲突时，`proposed_actions` 先给 constraints 分组摘要
+
+当前状态：
+
+- 单条 idea 下的多 claim / 多 rule 绑定已经打通
+- 但如果 plan 直接只列一串具体输入，人工仍要自己先把它们按 rule 分组再理解
+
+因此本轮先在 explainer 层加一层摘要：
+
+- 当同一 idea 同时命中两条及以上 world-rule
+- `proposed_actions` 先输出一条 constraints 域的 grouped summary
+- 再保留每条 rule 对应的 delay / cutoff / exception 具体输入
+- grouped summary 里直接列出每条 rule 的策略、目标文件、direct/override 和跨 domain impact 类型，并继续细分哪些 impact 可直接 apply、哪些只能 review
+- grouped summary 里还要带出按主体链划分的 exception scope，至少区分 `shared-subject` 和 `split-subjects`
+- 如果同一主体在标题和正文里同时触发泛化 object 与更具体 object，claim 层优先保留更具体的匹配，减少 world-rule 下游重复绑定
+- 如果多主体句子里前后主体分别对应不同 object，claim 层要按主体窗口拆开，避免后一个主体的 object 被前一个主体误吸收
+- 如果同一主体在同一 object family 里出现更短的概括表达和更长的具体表达，claim 层优先保留更具体的那条
+- grouped summary 里直接列出每条 rule 的策略、目标文件和 direct/override 信息
+
+原因：
+
+- 先按 rule 聚合，人工更容易判断本次是“一条规则多策略”，还是“多条规则并行冲突”
+- 这能减少在 merge plan 里来回对照多条 input 的成本
+- 先把摘要层补上，后续再继续细化更完整的 impact explainer
+
+---
+
+## 2026-05-22
+
+### 决策：`world-rule` 的 merge plan 开始按命中的 claim 精确绑定多条 rule
+
+当前状态：
+
+- consistency-check 已经能在单条 idea 上产出多条 `world-rule conflict`
+- 但 merge plan 之前仍会按 subject 取第一条 claim，导致多条 rule 可能共用同一个 exception object
+
+因此本轮把 world-rule 的下游绑定再收紧一层：
+
+- 单条 idea 中如果抽出多条 `knowledge_claims`
+- 每条 world-rule issue 都要把自己命中的 claim 写进 `issues[].details`
+- `plan_idea_merge` 的 exception 输入直接消费这组命中结果，而不是在 merge 层重新猜 claim
+
+原因：
+
+- 否则多 rule 场景下会把错误 object 写进 `world_rule_exceptions`
+- 先让 issue 层把“这条 rule 命中了哪条 claim”说清楚，下游 plan/apply 才能稳定
+- 这为后续做多 rule explainers 分组提供了结构化锚点
+
+---
+
+## 2026-05-22
+
+### 决策：`world-rule` 检测与例外豁免开始复用 `knowledge_claims` 做 subject/object 协同
+
+当前状态：
+
+- `knowledge object` 已有保守同义归一
+- 但 `world-rule conflict` 和 `world_rule_exception` 之前仍主要依赖原句字面命中
+- 这会让 `组织首领身份 / 组织首领是谁` 这类 object 在 world-rule 层出现漏报或豁免失效
+
+因此本轮固定一个新的输入边界：
+
+- world-rule 检测优先读取 draft 中已抽出的 `knowledge_claims`
+- rule 的 subject / object 命中，先走结构化 claim，再退回原句字面
+- exception 的 subject / object 匹配，也改为优先复用同一套 claim / object matcher
+
+原因：
+
+- 这样可以让 knowledge-state 和 world-rule 共用同一套 object 解释层
+- 能最短路径减少 world-rule 的同义表达漏报
+- 先把单 claim、单 subject、单 rule 的闭环收紧，后续再继续补多 claim / 多 rule 的边界
+
+---
+
+## 2026-05-21
+
+### 决策：`knowledge object` 先采用“保守同义归一 + 对象家族匹配”
+
+当前状态：
+
+- 原先的 `knowledge-state` object matching 主要依赖包含关系和少量字符重叠
+- 这会让“不是一路 / 不是同一阵营”“身份 / 是谁”“内鬼 / 泄密”这类常见同义表达有时能撞上，但也会把“有人调查”误判成“有人泄密”
+
+因此本轮先固定一个保守边界：
+
+- 只为少量高频 object 家族做归一：
+  `身份 / 是谁`、`内鬼 / 泄密`、`不是一路 / 不是同一阵营`
+- 对可识别的对象改用家族签名匹配，而不是继续放任低门槛字符重叠
+- 对剩余兜底匹配收紧条件，优先压掉共享前缀带来的误报
+
+原因：
+
+- 这批 object family 已经反复出现在当前 demo 和测试样本里
+- 它们足够高频，值得先用确定性规则收进来
+- 先把最明显的漏报 / 误报都压住，再考虑更宽的 object graph 推理
+
+---
+
+## 2026-05-21
+
+### 决策：`title-based drift` 先允许“安全的扩写标题部分匹配”
+
+当前状态：
+
+- consistency-check 已有基于 title 的 chapter drift 检查
+- 但之前只接受规范化后的完全相等
+- 真实工作区里，同一事件 / 场景标题经常会被补上地点括注、卷内副标题或短说明
+
+因此本轮固定一个保守边界：
+
+- 对规范化后长度足够的标题，允许双向包含式匹配
+- 先覆盖“主标题 + 括注 / 副标题”这类常见扩写
+- 暂不引入更宽的模糊相似度匹配
+
+原因：
+
+- 这能直接补上 title-based drift 的一批漏报
+- 双向包含比通用模糊匹配更可解释，也更容易控制误报
+- 先把最常见的扩写标题收进来，后续再继续细化 object matching 和更复杂的 drift case
+
+---
+
+## 2026-05-20
+
+### 决策：`knowledge-state conflict` 命中更早与更晚记录时，优先只保留更早冲突
+
+当前状态：
+
+- consistency-check 已能同时读取 timeline / outline / canon 的知情记录
+- 同一知情事实如果既有更早记录、又有更晚记录，之前会在一条 idea 上同时产出两条 `knowledge-state conflict`
+
+因此本轮固定一个优先级边界：
+
+- 只要更早记录已经足够说明“这不是首次 / 关键知情点”，就不再额外报告未来同事实的重复漂移
+
+原因：
+
+- 对 merge gate 来说，更早记录已经构成充分 blocker
+- 再叠加未来重复记录，只会放大噪音，不会提供新的决策信息
+- 先把冲突优先级收紧，后续再继续细化 title-based drift 和 object matching
+
+---
+
+## 2026-05-20
+
+### 决策：`knowledge-state` 和 `relationship-history` 先补“后文复述 / 未来重复状态”豁免
+
+当前状态：
+
+- claim-level `knowledge-state` 检查已经可用
+- relationship-history 已有“中间状态转移豁免”
+- 但未来章节里的复述型记录仍会产生噪音
+
+因此本轮先固定两条边界：
+
+- 如果未来知识记录明显带有“再次 / 重新 / 已经”类复述信号，则不把它当作新的首次知情冲突
+- 如果关系图谱已经出现“同状态 -> 不同状态 -> 同状态”的路径，且 draft 本身带有“重新 / 再次”信号，则允许豁免未来重复同状态记录
+
+原因：
+
+- 这两类误报在实际大纲里很常见
+- 它们可以用确定性规则压掉，不需要先上完整图谱推理
+- 先减少噪音，后续 merge plan 的结构化输入才更稳定
+
+---
+
+## 2026-05-20
+
+### 决策：为 legacy workspace 增加正式的 intake backfill / repair 脚本入口
+
+当前状态：
+
+- demo workspace 已经暴露出“idea 还在，但 intake draft / view / path 元数据丢失”的历史问题
+- 继续靠手工 patch JSON 不能算正式工作流能力
+
+因此本轮补一个正式入口：
+
+- `scripts/backfill_intake_drafts.py`
+- 默认只修需要修的 pending idea
+- 可按 `--all-pending` / `--all-ideas` 批量回写
+- 可按 `--force-rebuild` 重建已有 draft
+
+原因：
+
+- 让 legacy workspace repair 进入可重复执行的脚本层
+- 让后续 consistency / merge 不再依赖手工补 state 文件
+- 先把 repair 路径固定，后续再继续增加 explainers 和批量策略
+
+---
+
+## 2026-05-20
+
+### 决策：`plan_idea_merge` 的 `proposed_actions` 改为 domain-specific explainers
+
+当前状态：
+
+- 原先的 `proposed_actions` 只会说“并入某个 domain”
+- `timeline_merge_inputs` 已经足够接近执行层，但 plan 展示还没有把这些信息真正解释出来
+
+因此本轮不新开平行字段，而是直接升级现有 `proposed_actions`：
+
+- 保留列表结构和兼容字段
+- 补充 `summary`
+- 补充 `merge_input_id`
+- 补充 `readiness`
+- 补充 `planned_writes`
+- 补充 `source_signals`
+
+原因：
+
+- 这样能最短路径把 plan 从“领域提示”推进到“执行说明”
+- 不需要强制上游或 HTML 重新适配另一套字段名
+- 后续如果继续细化 explainers，也仍可沿着同一数据结构扩展
+
+---
+
+## 2026-05-20
+
+### 决策：把 `knowledge-state` 与 `world-rule exception` 正式收进 `state/canon-index.json`
+
+当前状态：
+
+- `relationships[]` 已经进入 `state/canon-index.json`
+- `knowledge-state conflict` 已能稳定产出 claim 和 issue
+- `document-world-rule-exception` 之前只会改 `constraints/constraints.json`
+
+因此本轮把 canon 机器真相源再往前推进一层：
+
+- `state/canon-index.json -> knowledge_states[]`
+- `state/canon-index.json -> world_rule_exceptions[]`
+- `plan_idea_merge` 新增 `upsert-canon-knowledge-state / update-existing-knowledge-state`
+- `document-world-rule-exception` 同步把例外说明写入 canon
+- consistency-check 开始读取这两类 canon 记录，作为后续 merge / check 的正式输入
+
+原因：
+
+- 让 `knowledge-state` 不再只依赖 timeline / outline 的文本命中
+- 让 world-rule 例外不再只是 constraints 里的备注，而是可回流的机器事实
+- 先把 canon 真相源固定，再继续细化图谱推理和例外边界
