@@ -36,7 +36,7 @@
 
 如果只做一个任务，优先做这个：
 
-`先继续补 chapter-scoped 的 world-rule exception 展示边界，优先“已有三层 exception token，但 domain impact 组合和 prior-exception 复核语义还不够细”的 case。`
+`先继续压缩 chapter-scoped 的 world-rule grouped summary，优先“shared-exemption-base / shared-exemption-review 已分层，但和 conflict rule 共存时仍有重复 token”的 case。`
 
 刚完成的一步：
 
@@ -59,6 +59,18 @@
 - consistency report 现已开始显式输出 `world-rule-exemption-applied`，merge plan 在 clean gate 下也会补一条 exemption explainer，说明这是“已落地豁免”而不是“没命中规则”
 - 对已落地的 exception，grouped summary 现已开始区分 `direct` 沿用和仍需 `review` 的主体范围；如果同一 idea 同时存在冲突 rule 和已豁免 rule，也会收敛进同一条 constraints summary
 - `exception_scope` 现已开始拆成 `exception_scope_base / exception_subject_scope / exception_match_mode`，并稳定产出 `constraints:review-subject-scope`、`constraints:review-exception-chain`、`canon:review-exception-evidence` 这类 review impact token
+- `prior-exception` 的 review impacts 现已开始拆到 `canon / constraints / timeline / outline` 四层
+- `prior-exception` 的 grouped summary 现已直接带出 `review-exception-continuity / review-exception-chain / review-post-exception-beat / review-post-exception-scene`
+- `prior-exception` 的 grouped summary 现已继续细分 `write_shapes`，开始明确写出 `keep-existing-exception-record / carry-forward-exception-note / append-post-exception-beat / append-post-exception-scene-note`
+- 如果默认 merge 输入实际命中既有 `event_id / scene_id`，`prior-exception` 的 grouped summary 现已会把 `append-post-exception-*` 自动收紧成 `rewrite-post-exception-*`
+- 如果当前 case 不需要 timeline / outline 写入，`prior-exception` 的 grouped summary 现已会继续收紧成 `annotate-existing-exception-record / annotate-existing-rule-note`
+- 对 `prior-exception + local-signal`，如果这轮没有可落地的 `event_id / scene_id`，grouped summary 现已会继续收紧成纯 `review-exception-evidence`
+- 对 `prior-exception + claim-match` 的叙事型 idea，如果这轮虽然还没落到 event / scene target，grouped summary 现已仍会保留 `carry-forward-exception-note`
+- 如果这类 `claim-match` 叙事型 case 同时落在 `split-subjects / mixed-subjects`，grouped summary 现已会退回 `annotate-existing-rule-note + review-subject-scope`
+- 对 `prior-exception + local-signal`，如果别的主体只出现在窗口外，grouped summary 现已继续只做 `review-exception-evidence`；只有窗口内混主体时才升级 `review-subject-scope`
+- `same-chapter exemption` 的 review case 现已开始补 `review-same-chapter-beat / review-same-chapter-scene`，并复用同一套 `evidence-only / review-subject-scope` 规则
+- 多条 exemption rule 如果共享同一批 `review_impacts / review_write_shapes / targets`，grouped summary 现已会先提一条 `shared-exemption-review`，把公共 review token 上提，减少逐条重复
+- 如果同一组 exemption 同时混有 `direct` 和 `review`，grouped summary 现已还会再提一条 `shared-exemption-base`，把公共 `impacts / targets / domains` 再上提一层
 - 新增 `first-workflow-case/` 作为首个独立案例工作区，当前停在 `check-consistency` 已过、`plan-merge` 已生成、尚未 `apply`
 - world-rule 相关的 canon explainer 现已对齐到各自命中的 claim，不再误指第一条 claim
 - 多条 rule 共享同一事件/场景写入时，重复的 timeline / outline explainer 现已开始自动收敛
@@ -70,7 +82,7 @@
 - relationship / world-rule exception 的匹配边界
 - mixed-subject / 多 rule 的 world-rule exception 边界
 - 更多 `knowledge object` family 去重，以及更细的 chapter-scoped exception / relationship gate 边界
-- exemption summary 的 domain impact 组合与 prior-exception 说明继续细化
+- exemption summary 在“冲突 rule + shared exemption line”共存场景下的 grouped summary 去重与压缩继续细化
 - grouped summary 与逐条 explainer 的进一步压缩
 - intake repair 的 explainers 与批量回写摘要
 - rule-specific explainers

@@ -391,7 +391,95 @@ def _draft_domains_for_exemption_review(draft: dict[str, Any]) -> set[str]:
     return domains
 
 
-def _constraints_group_explainer(items: list[dict[str, Any]], report: dict[str, Any], draft: dict[str, Any]) -> dict[str, Any] | None:
+def _shared_values_for_rules(rule_map: dict[str, set[str]], rule_ids: list[str]) -> set[str]:
+    if len(rule_ids) < 2:
+        return set()
+    values = [set(rule_map.get(rule_id, set())) for rule_id in rule_ids]
+    if not values:
+        return set()
+    shared = set(values[0])
+    for value_set in values[1:]:
+        shared &= value_set
+    return shared
+
+
+def _world_rule_exemption_write_shapes(
+    workspace: Path,
+    items: list[dict[str, Any]],
+    draft: dict[str, Any],
+    *,
+    exception_scope_bases: set[str],
+    exception_subject_scopes: set[str],
+    exception_match_modes: set[str],
+    reuse_bucket: str,
+) -> set[str]:
+    event_map = _event_by_id(_event_records(workspace))
+    scene_map = _scene_by_id(_scene_records(workspace))
+    if reuse_bucket == "direct":
+        return {
+            "canon:reuse-existing-exception-record",
+            "constraints:reuse-existing-exception-note",
+        }
+
+    shapes = {"canon:keep-existing-exception-record"}
+
+    for item in items:
+        strategy = str(item.get("strategy") or "").strip()
+        apply_args = item.get("apply_args", {}) if isinstance(item.get("apply_args"), dict) else {}
+        target_domains = set(_target_file_domains(item.get("target_files", [])))
+        if "timeline" in target_domains:
+            event_id = str(apply_args.get("event_id") or "").strip()
+            if strategy == "update-existing-event" or (strategy == "create-event-and-scene" and event_id and event_id in event_map):
+                shapes.add("timeline:rewrite-post-exception-beat")
+            elif strategy == "create-event-and-scene" and event_id:
+                shapes.add("timeline:append-post-exception-beat")
+        if "outline" in target_domains:
+            scene_id = str(apply_args.get("scene_id") or "").strip()
+            if strategy == "update-existing-scene" or (strategy == "create-event-and-scene" and scene_id and scene_id in scene_map):
+                shapes.add("outline:rewrite-post-exception-scene-note")
+            elif strategy == "create-event-and-scene" and scene_id:
+                shapes.add("outline:append-post-exception-scene-note")
+
+    if "local-signal" in exception_match_modes and not any(
+        shape.startswith("timeline:") or shape.startswith("outline:")
+        for shape in shapes
+    ):
+        shapes.update({"canon:annotate-existing-exception-record", "constraints:annotate-existing-rule-note"})
+        return shapes
+
+    draft_domains = _draft_domains_for_exemption_review(draft)
+    if "timeline" in draft_domains and not any(shape.startswith("timeline:") for shape in shapes):
+        shapes.add("timeline:append-post-exception-beat")
+    if "outline" in draft_domains and not any(shape.startswith("outline:") for shape in shapes):
+        shapes.add("outline:append-post-exception-scene-note")
+
+    if any(shape.startswith("timeline:") or shape.startswith("outline:") for shape in shapes):
+        if "prior-exception" in exception_scope_bases:
+            shapes.add("constraints:carry-forward-exception-note")
+        else:
+            shapes.add("constraints:annotate-existing-rule-note")
+        return shapes
+
+    narrative_kinds = {"reveal", "twist", "backstory", "event", "scene", "death"}
+    if (
+        "prior-exception" in exception_scope_bases
+        and not any(scope in {"split-subjects", "mixed-subjects", "review-subject"} for scope in exception_subject_scopes)
+        and "claim-match" in exception_match_modes
+        and str(draft.get("kind") or "").strip().lower() in narrative_kinds
+    ):
+        shapes.add("constraints:carry-forward-exception-note")
+        return shapes
+
+    shapes.update({"canon:annotate-existing-exception-record", "constraints:annotate-existing-rule-note"})
+    return shapes
+
+
+def _constraints_group_explainer(
+    workspace: Path,
+    items: list[dict[str, Any]],
+    report: dict[str, Any],
+    draft: dict[str, Any],
+) -> dict[str, Any] | None:
     world_rule_items = [
         item
         for item in items
@@ -403,6 +491,9 @@ def _constraints_group_explainer(items: list[dict[str, Any]], report: dict[str, 
     impacts_by_rule: dict[str, set[str]] = {}
     direct_impacts_by_rule: dict[str, set[str]] = {}
     review_impacts_by_rule: dict[str, set[str]] = {}
+    write_shapes_by_rule: dict[str, set[str]] = {}
+    direct_write_shapes_by_rule: dict[str, set[str]] = {}
+    review_write_shapes_by_rule: dict[str, set[str]] = {}
     subjects_by_rule: dict[str, set[str]] = {}
     direct_by_rule: dict[str, int] = {}
     override_by_rule: dict[str, int] = {}
@@ -422,11 +513,22 @@ def _constraints_group_explainer(items: list[dict[str, Any]], report: dict[str, 
         domains_by_rule.setdefault(rule_id, set()).update(_target_file_domains(item.get("target_files", [])))
         impacts = _world_rule_impacts_for_item(item)
         impacts_by_rule.setdefault(rule_id, set()).update(impacts)
+        if strategy == "resolve-world-rule-by-delaying-event":
+            write_shapes = {"timeline:rewrite-event-chapter", "outline:rewrite-scene-chapter"}
+        elif strategy == "resolve-world-rule-by-updating-cutoff":
+            write_shapes = {"constraints:rewrite-cutoff", "timeline:carry-event-forward", "outline:carry-scene-forward"}
+        elif strategy == "document-world-rule-exception":
+            write_shapes = {"constraints:append-exception-note", "canon:record-exception-entry"}
+        else:
+            write_shapes = set()
+        write_shapes_by_rule.setdefault(rule_id, set()).update(write_shapes)
         subjects_by_rule.setdefault(rule_id, set()).update(_world_rule_subjects_for_item(item))
         if _impact_bucket_for_item(item) == "direct":
             direct_impacts_by_rule.setdefault(rule_id, set()).update(impacts)
+            direct_write_shapes_by_rule.setdefault(rule_id, set()).update(write_shapes)
         else:
             review_impacts_by_rule.setdefault(rule_id, set()).update(impacts)
+            review_write_shapes_by_rule.setdefault(rule_id, set()).update(write_shapes)
         if item.get("can_apply_directly"):
             direct_by_rule[rule_id] = direct_by_rule.get(rule_id, 0) + 1
         if item.get("requires_override"):
@@ -441,6 +543,10 @@ def _constraints_group_explainer(items: list[dict[str, Any]], report: dict[str, 
     exception_scopes_by_rule: dict[str, set[str]] = {}
     exemption_direct_by_rule: dict[str, int] = {}
     exemption_review_by_rule: dict[str, int] = {}
+    reuse_bucket_by_rule: dict[str, str] = {}
+    exception_scope_bases_by_rule: dict[str, set[str]] = {}
+    exception_subject_scopes_by_rule: dict[str, set[str]] = {}
+    exception_match_modes_by_rule: dict[str, set[str]] = {}
     for item in exemptions:
         details = item.get("details", {}) if isinstance(item.get("details"), dict) else {}
         rule_id = str(details.get("rule_id") or "").strip()
@@ -478,32 +584,10 @@ def _constraints_group_explainer(items: list[dict[str, Any]], report: dict[str, 
     if len(conflict_rule_ids) < 2 and not exemption_rule_ids:
         return None
 
-    all_targets: set[str] = set()
-    planned_writes: list[str] = []
-    overall_readiness = "ready"
-    for rule_id in rule_ids:
-        all_targets.update(targets_by_rule.get(rule_id, set()))
-        subject_scope = _world_rule_subject_scope(subjects_by_rule.get(rule_id, set()), all_subjects)
-        if rule_id in conflict_rule_ids:
-            line = (
-                f"{rule_id}: "
-                f"{', '.join(strategies_by_rule.get(rule_id, [])) or 'review'}"
-                f" | direct={direct_by_rule.get(rule_id, 0)}"
-                f" | override={override_by_rule.get(rule_id, 0)}"
-                f" | subjects={', '.join(sorted(subjects_by_rule.get(rule_id, set())))}"
-                f" | subject_scope={subject_scope}"
-                f" | domains={', '.join(sorted(domains_by_rule.get(rule_id, set())))}"
-                f" | impacts={', '.join(sorted(impacts_by_rule.get(rule_id, set())))}"
-                f" | direct_impacts={', '.join(sorted(direct_impacts_by_rule.get(rule_id, set())))}"
-                f" | review_impacts={', '.join(sorted(review_impacts_by_rule.get(rule_id, set())))}"
-                f" | targets={', '.join(sorted(targets_by_rule.get(rule_id, set())))}"
-            )
-            planned_writes.append(line)
-            overall_readiness = "needs-review"
-            continue
-
+    for rule_id in exemption_rule_ids:
         exception_scopes = exception_scopes_by_rule.get(rule_id, set())
         reuse_bucket = _world_rule_exemption_bucket(exception_scopes)
+        reuse_bucket_by_rule[rule_id] = reuse_bucket
         exception_scope_bases = {
             base_scope
             for base_scope, _, _ in (_split_world_rule_exemption_scope(scope) for scope in exception_scopes)
@@ -519,49 +603,208 @@ def _constraints_group_explainer(items: list[dict[str, Any]], report: dict[str, 
             for _, _, match_mode in (_split_world_rule_exemption_scope(scope) for scope in exception_scopes)
             if match_mode
         }
+        exception_scope_bases_by_rule[rule_id] = exception_scope_bases
+        exception_subject_scopes_by_rule[rule_id] = exception_subject_scopes
+        exception_match_modes_by_rule[rule_id] = exception_match_modes
         if reuse_bucket == "direct":
             exemption_direct_by_rule[rule_id] = 1
             direct_impacts_by_rule.setdefault(rule_id, set()).update({"canon:reuse-exception", "constraints:reuse-exception"})
-        else:
-            exemption_review_by_rule[rule_id] = 1
-            review_impacts = {"canon:reuse-exception", "constraints:reuse-exception"}
-            if "prior-exception" in exception_scope_bases:
+            direct_write_shapes = _world_rule_exemption_write_shapes(
+                workspace,
+                items,
+                draft,
+                exception_scope_bases=exception_scope_bases,
+                exception_subject_scopes=exception_subject_scopes,
+                exception_match_modes=exception_match_modes,
+                reuse_bucket=reuse_bucket,
+            )
+            write_shapes_by_rule.setdefault(rule_id, set()).update(direct_write_shapes)
+            direct_write_shapes_by_rule.setdefault(rule_id, set()).update(direct_write_shapes)
+            continue
+
+        exemption_review_by_rule[rule_id] = 1
+        review_write_shapes = _world_rule_exemption_write_shapes(
+            workspace,
+            items,
+            draft,
+            exception_scope_bases=exception_scope_bases,
+            exception_subject_scopes=exception_subject_scopes,
+            exception_match_modes=exception_match_modes,
+            reuse_bucket=reuse_bucket,
+        )
+        review_impacts = {"canon:reuse-exception", "constraints:reuse-exception"}
+        if "prior-exception" in exception_scope_bases:
+            if "local-signal" not in exception_match_modes or any(
+                shape.startswith("timeline:") or shape.startswith("outline:")
+                for shape in review_write_shapes
+            ):
                 review_impacts.update(
                     {
                         "canon:review-exception-continuity",
                         "constraints:review-exception-chain",
-                        "timeline:review-post-exception-beat",
-                        "outline:review-post-exception-scene",
                     }
                 )
-                targets_by_rule.setdefault(rule_id, set()).update({"timeline/events.json", "outline/scene-index.json"})
-                exemption_review_domains = _draft_domains_for_exemption_review(draft)
-                domains_by_rule.setdefault(rule_id, set()).update({"timeline", "outline"} & exemption_review_domains or {"timeline", "outline"})
-            if any(scope in {"split-subjects", "mixed-subjects", "review-subject"} for scope in exception_subject_scopes):
-                review_impacts.add("constraints:review-subject-scope")
-            if "local-signal" in exception_match_modes:
-                review_impacts.add("canon:review-exception-evidence")
-            review_impacts_by_rule.setdefault(rule_id, set()).update(review_impacts)
+        if any(shape.startswith("timeline:") for shape in review_write_shapes):
+            review_impacts.add(
+                "timeline:review-post-exception-beat"
+                if "prior-exception" in exception_scope_bases
+                else "timeline:review-same-chapter-beat"
+            )
+            targets_by_rule.setdefault(rule_id, set()).add("timeline/events.json")
+            domains_by_rule.setdefault(rule_id, set()).add("timeline")
+        if any(shape.startswith("outline:") for shape in review_write_shapes):
+            review_impacts.add(
+                "outline:review-post-exception-scene"
+                if "prior-exception" in exception_scope_bases
+                else "outline:review-same-chapter-scene"
+            )
+            targets_by_rule.setdefault(rule_id, set()).add("outline/scene-index.json")
+            domains_by_rule.setdefault(rule_id, set()).add("outline")
+        if any(scope in {"split-subjects", "mixed-subjects", "review-subject"} for scope in exception_subject_scopes):
+            review_impacts.add("constraints:review-subject-scope")
+        if "local-signal" in exception_match_modes:
+            review_impacts.add("canon:review-exception-evidence")
+        impacts_by_rule.setdefault(rule_id, set()).update(review_impacts)
+        review_impacts_by_rule.setdefault(rule_id, set()).update(review_impacts)
+        write_shapes_by_rule.setdefault(rule_id, set()).update(review_write_shapes)
+        review_write_shapes_by_rule.setdefault(rule_id, set()).update(review_write_shapes)
+
+    direct_exemption_rule_ids = sorted(
+        rule_id for rule_id in exemption_rule_ids if reuse_bucket_by_rule.get(rule_id) == "direct"
+    )
+    review_exemption_rule_ids = sorted(
+        rule_id for rule_id in exemption_rule_ids if reuse_bucket_by_rule.get(rule_id) == "review"
+    )
+    emit_shared_exemption_base = len(direct_exemption_rule_ids) >= 2 or (
+        bool(direct_exemption_rule_ids) and bool(review_exemption_rule_ids)
+    )
+    shared_exemption_impacts = (
+        _shared_values_for_rules(impacts_by_rule, exemption_rule_ids) if emit_shared_exemption_base else set()
+    )
+    shared_exemption_write_shapes = (
+        _shared_values_for_rules(write_shapes_by_rule, exemption_rule_ids) if emit_shared_exemption_base else set()
+    )
+    shared_exemption_targets = (
+        _shared_values_for_rules(targets_by_rule, exemption_rule_ids) if emit_shared_exemption_base else set()
+    )
+    shared_exemption_domains = (
+        _shared_values_for_rules(domains_by_rule, exemption_rule_ids) if emit_shared_exemption_base else set()
+    )
+    shared_review_impacts = _shared_values_for_rules(review_impacts_by_rule, review_exemption_rule_ids)
+    shared_review_write_shapes = _shared_values_for_rules(review_write_shapes_by_rule, review_exemption_rule_ids)
+    shared_review_targets = _shared_values_for_rules(targets_by_rule, review_exemption_rule_ids)
+    shared_review_domains = _shared_values_for_rules(domains_by_rule, review_exemption_rule_ids)
+
+    all_targets: set[str] = set()
+    planned_writes: list[str] = []
+    overall_readiness = "ready"
+    if review_exemption_rule_ids:
+        overall_readiness = "needs-review"
+    if shared_exemption_impacts or shared_exemption_write_shapes or shared_exemption_targets or shared_exemption_domains:
+        shared_segments = ["shared-exemption-base"]
+        if shared_exemption_domains:
+            shared_segments.append(f"domains={', '.join(sorted(shared_exemption_domains))}")
+        if shared_exemption_impacts:
+            shared_segments.append(f"impacts={', '.join(sorted(shared_exemption_impacts))}")
+        if shared_exemption_write_shapes:
+            shared_segments.append(f"write_shapes={', '.join(sorted(shared_exemption_write_shapes))}")
+        if shared_exemption_targets:
+            shared_segments.append(f"targets={', '.join(sorted(shared_exemption_targets))}")
+        planned_writes.append(" | ".join(shared_segments))
+    if shared_review_impacts or shared_review_write_shapes or shared_review_targets or shared_review_domains:
+        shared_segments = ["shared-exemption-review"]
+        if shared_review_domains:
+            shared_segments.append(f"domains={', '.join(sorted(shared_review_domains))}")
+        if shared_review_impacts:
+            shared_segments.append(f"review_impacts={', '.join(sorted(shared_review_impacts))}")
+        if shared_review_write_shapes:
+            shared_segments.append(f"review_write_shapes={', '.join(sorted(shared_review_write_shapes))}")
+        if shared_review_targets:
+            shared_segments.append(f"targets={', '.join(sorted(shared_review_targets))}")
+        planned_writes.append(" | ".join(shared_segments))
+
+    for rule_id in rule_ids:
+        all_targets.update(targets_by_rule.get(rule_id, set()))
+        subject_scope = _world_rule_subject_scope(subjects_by_rule.get(rule_id, set()), all_subjects)
+        if rule_id in conflict_rule_ids:
+            line = (
+                f"{rule_id}: "
+                f"{', '.join(strategies_by_rule.get(rule_id, [])) or 'review'}"
+                f" | direct={direct_by_rule.get(rule_id, 0)}"
+                f" | override={override_by_rule.get(rule_id, 0)}"
+                f" | subjects={', '.join(sorted(subjects_by_rule.get(rule_id, set())))}"
+                f" | subject_scope={subject_scope}"
+                f" | domains={', '.join(sorted(domains_by_rule.get(rule_id, set())))}"
+                f" | impacts={', '.join(sorted(impacts_by_rule.get(rule_id, set())))}"
+                f" | direct_impacts={', '.join(sorted(direct_impacts_by_rule.get(rule_id, set())))}"
+                f" | review_impacts={', '.join(sorted(review_impacts_by_rule.get(rule_id, set())))}"
+                f" | write_shapes={', '.join(sorted(write_shapes_by_rule.get(rule_id, set())))}"
+                f" | direct_write_shapes={', '.join(sorted(direct_write_shapes_by_rule.get(rule_id, set())))}"
+                f" | review_write_shapes={', '.join(sorted(review_write_shapes_by_rule.get(rule_id, set())))}"
+                f" | targets={', '.join(sorted(targets_by_rule.get(rule_id, set())))}"
+            )
+            planned_writes.append(line)
             overall_readiness = "needs-review"
-        line = (
-            f"{rule_id}: "
-            f"reuse-existing-exception"
-            f" | direct={exemption_direct_by_rule.get(rule_id, 0)}"
-            f" | review={exemption_review_by_rule.get(rule_id, 0)}"
-            f" | exceptions={', '.join(sorted(exception_ids_by_rule.get(rule_id, set()))) or 'existing'}"
-            f" | subjects={', '.join(sorted(subjects_by_rule.get(rule_id, set())))}"
-            f" | subject_scope={subject_scope}"
-            f" | exception_scope={', '.join(sorted(exception_scopes))}"
-            f" | exception_scope_base={', '.join(sorted(exception_scope_bases))}"
-            f" | exception_subject_scope={', '.join(sorted(exception_subject_scopes))}"
-            f" | exception_match_mode={', '.join(sorted(exception_match_modes))}"
-            f" | domains={', '.join(sorted(domains_by_rule.get(rule_id, set())))}"
-            f" | impacts={', '.join(sorted(impacts_by_rule.get(rule_id, set())))}"
-            f" | direct_impacts={', '.join(sorted(direct_impacts_by_rule.get(rule_id, set())))}"
-            f" | review_impacts={', '.join(sorted(review_impacts_by_rule.get(rule_id, set())))}"
-            f" | targets={', '.join(sorted(targets_by_rule.get(rule_id, set())))}"
-        )
-        planned_writes.append(line)
+            continue
+
+        exception_scopes = exception_scopes_by_rule.get(rule_id, set())
+        reuse_bucket = reuse_bucket_by_rule.get(rule_id, "review")
+        exception_scope_bases = exception_scope_bases_by_rule.get(rule_id, set())
+        exception_subject_scopes = exception_subject_scopes_by_rule.get(rule_id, set())
+        exception_match_modes = exception_match_modes_by_rule.get(rule_id, set())
+        line_domains = set(domains_by_rule.get(rule_id, set()))
+        line_impacts = set(impacts_by_rule.get(rule_id, set()))
+        line_direct_impacts = set(direct_impacts_by_rule.get(rule_id, set()))
+        line_review_impacts = set(review_impacts_by_rule.get(rule_id, set()))
+        line_write_shapes = set(write_shapes_by_rule.get(rule_id, set()))
+        line_direct_write_shapes = set(direct_write_shapes_by_rule.get(rule_id, set()))
+        line_review_write_shapes = set(review_write_shapes_by_rule.get(rule_id, set()))
+        line_targets = set(targets_by_rule.get(rule_id, set()))
+        if len(exemption_rule_ids) >= 2:
+            line_domains -= shared_exemption_domains
+            line_impacts -= shared_exemption_impacts
+            line_direct_impacts -= shared_exemption_impacts
+            line_review_impacts -= shared_exemption_impacts
+            line_write_shapes -= shared_exemption_write_shapes
+            line_direct_write_shapes -= shared_exemption_write_shapes
+            line_review_write_shapes -= shared_exemption_write_shapes
+            line_targets -= shared_exemption_targets
+        if reuse_bucket == "review" and len(review_exemption_rule_ids) >= 2:
+            line_domains -= shared_review_domains
+            line_review_impacts -= shared_review_impacts
+            line_impacts -= shared_review_impacts
+            line_review_write_shapes -= shared_review_write_shapes
+            line_write_shapes -= shared_review_write_shapes
+            line_targets -= shared_review_targets
+        segments = [
+            f"{rule_id}: reuse-existing-exception",
+            f"direct={exemption_direct_by_rule.get(rule_id, 0)}",
+            f"review={exemption_review_by_rule.get(rule_id, 0)}",
+            f"exceptions={', '.join(sorted(exception_ids_by_rule.get(rule_id, set()))) or 'existing'}",
+            f"subjects={', '.join(sorted(subjects_by_rule.get(rule_id, set())))}",
+            f"subject_scope={subject_scope}",
+            f"exception_scope={', '.join(sorted(exception_scopes))}",
+            f"exception_scope_base={', '.join(sorted(exception_scope_bases))}",
+            f"exception_subject_scope={', '.join(sorted(exception_subject_scopes))}",
+            f"exception_match_mode={', '.join(sorted(exception_match_modes))}",
+        ]
+        if line_domains:
+            segments.append(f"domains={', '.join(sorted(line_domains))}")
+        if line_impacts:
+            segments.append(f"impacts={', '.join(sorted(line_impacts))}")
+        if line_direct_impacts:
+            segments.append(f"direct_impacts={', '.join(sorted(line_direct_impacts))}")
+        if line_review_impacts:
+            segments.append(f"review_impacts={', '.join(sorted(line_review_impacts))}")
+        if line_write_shapes:
+            segments.append(f"write_shapes={', '.join(sorted(line_write_shapes))}")
+        if line_direct_write_shapes:
+            segments.append(f"direct_write_shapes={', '.join(sorted(line_direct_write_shapes))}")
+        if line_review_write_shapes:
+            segments.append(f"review_write_shapes={', '.join(sorted(line_review_write_shapes))}")
+        if line_targets:
+            segments.append(f"targets={', '.join(sorted(line_targets))}")
+        planned_writes.append(" | ".join(segments))
 
     if conflict_rule_ids and exemption_rule_ids:
         summary = f"当前这条 idea 涉及 {len(rule_ids)} 条 world-rule；其中 {len(conflict_rule_ids)} 条仍需处理，{len(exemption_rule_ids)} 条已有正式 exception 覆盖。"
@@ -730,7 +973,7 @@ def _domain_explainers(
             }
         )
 
-    constraints_group_explainer = _constraints_group_explainer(timeline_merge_inputs, report, draft)
+    constraints_group_explainer = _constraints_group_explainer(workspace, timeline_merge_inputs, report, draft)
     if constraints_group_explainer is not None:
         explainers.append(constraints_group_explainer)
 

@@ -106,6 +106,18 @@
 - 如果某条 `world-rule` 已被正式 exception 放行，consistency report 现在会在 `exemptions[]` 中显式记一条 `world-rule-exemption-applied`，而不是只返回“无冲突”
 - merge plan 的 grouped constraints 说明也会继续把这类 rule 带出来，并区分哪些可直接沿用、哪些仍需人工 review
 - 对已豁免 rule，当前还会进一步写出 `exception_scope_base / exception_subject_scope / exception_match_mode`，并据此产出第一层 review impact token
+- 对 `prior-exception`，review impacts 现在还会继续拆到 `canon / constraints / timeline / outline` 四层，方便 merge plan 更明确地提示复核方向
+- 当前这组 `prior-exception` review impacts 还会直接落成更稳定的 token，供 grouped summary 和后续写入组合继续复用
+- grouped summary 现在还会继续补一层 `write_shapes`，把“沿用旧 exception 但还需复核什么”继续压到更接近执行的 token，例如 `keep-existing-exception-record / carry-forward-exception-note / append-post-exception-beat / append-post-exception-scene-note`
+- 如果默认 merge 输入命中既有 `event_id / scene_id`，这层 `write_shapes` 还会继续把 `append-post-exception-*` 自动收紧成 `rewrite-post-exception-*`
+- 如果当前 case 不需要继续动 timeline / outline，grouped summary 现在会继续收紧成 `annotate-existing-exception-record / annotate-existing-rule-note`，同时不再补 timeline / outline 的 review impact
+- 对 `prior-exception + local-signal`，如果这轮没有可落地的 `event_id / scene_id`，grouped summary 现在会继续收紧成 `review-exception-evidence`，而不再默认补 `review-exception-chain`
+- 对 `prior-exception + claim-match` 的叙事型 idea，即使这轮还没有 event / scene target，grouped summary 现在也可能继续保留 `carry-forward-exception-note`，只是不再自动补 timeline / outline 的 review impact
+- 但如果这类 narrative `claim-match` 同时落在 `split-subjects / mixed-subjects`，grouped summary 现在会退回 `annotate-existing-rule-note + review-subject-scope`，而不再默认 `carry-forward`
+- 对 `local-signal` 的多主体 case，当前还会继续区分“别的主体只在窗口外”与“主体窗口内已混主体”：前者仍只做 `review-exception-evidence`，后者才额外补 `review-subject-scope`
+- `same-chapter exemption` 的 review case 现在也会继续带出 `review-same-chapter-beat / review-same-chapter-scene`，并共用同一套 `local-signal` 窗口内/窗口外主体判定
+- 如果多条已豁免 rule 共享同一批 `review_impacts / review_write_shapes / targets`，merge plan 现在还会先提一条 `shared-exemption-review`，把公共 review token 集中上提，减少逐条重复
+- 如果同一组 exemption 同时混有 `direct` 和 `review`，merge plan 现在还会再提一条 `shared-exemption-base`，把公共 `impacts / targets / domains` 上提，减少 mixed summary 里的重复
 - 如果同一主体同时抽到标题里的泛化 object 和正文里的更具体 object，`knowledge_claims` 会优先收敛到更具体那条
 - 如果多主体句子里不同主体分别对应不同 object，`knowledge_claims` 会优先按主体窗口拆开，避免跨主体串绑
 - 如果同一主体在同一 object family 里同时抽到更短概括表达和更长具体表达，`knowledge_claims` 会优先保留更具体那条；当前已覆盖 `identity / leak / same-camp / separate-camp`

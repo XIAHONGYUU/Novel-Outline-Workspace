@@ -182,6 +182,121 @@
 - `constraints:review-subject-scope`
 - `constraints:review-exception-chain`
 - `canon:review-exception-evidence`
+- `canon:review-exception-continuity`
+- `timeline:review-post-exception-beat`
+- `outline:review-post-exception-scene`
+
+其中 `prior-exception` 常见会组合出：
+
+- `canon:review-exception-continuity`
+- `constraints:review-exception-chain`
+- `timeline:review-post-exception-beat`
+- `outline:review-post-exception-scene`
+
+当前 grouped summary 里，如果继续往写入动作收敛，常见还会带出：
+
+- `canon:reuse-existing-exception-record`
+- `constraints:reuse-existing-exception-note`
+- `canon:keep-existing-exception-record`
+- `canon:annotate-existing-exception-record`
+- `constraints:carry-forward-exception-note`
+- `constraints:annotate-existing-rule-note`
+- `timeline:append-post-exception-beat`
+- `timeline:rewrite-post-exception-beat`
+- `outline:append-post-exception-scene-note`
+- `outline:rewrite-post-exception-scene-note`
+
+其中如果默认 merge 输入虽然还是 `create-event-and-scene`，但其 `event_id / scene_id` 已经命中既有正式记录，grouped summary 现在会优先落成：
+
+- `timeline:rewrite-post-exception-beat`
+- `outline:rewrite-post-exception-scene-note`
+
+而不是继续写成 `append-post-exception-*`。
+
+同样地，如果 `create-event-and-scene` 这轮连可落地的 `event_id / scene_id` 都没有，
+当前 grouped summary 也不会再把它误写成 `append-post-exception-*`。
+
+如果当前 case 不需要继续动 timeline / outline，grouped summary 现在还会继续收紧成：
+
+- `canon:keep-existing-exception-record`
+- `canon:annotate-existing-exception-record`
+- `constraints:annotate-existing-rule-note`
+
+这时通常也不会再补 `timeline:review-post-exception-beat`、`outline:review-post-exception-scene`
+或对应的 `timeline/events.json`、`outline/scene-index.json` target。
+
+对 `prior-exception + local-signal`，如果这轮既没有可落地的 `event_id / scene_id`，
+也没有额外 timeline / outline 写入，当前通常会继续收紧成：
+
+- `canon:review-exception-evidence`
+- `canon:keep-existing-exception-record`
+- `canon:annotate-existing-exception-record`
+- `constraints:annotate-existing-rule-note`
+
+此时如果别的主体只出现在目标主体窗口之外，当前 `exception_scope` 仍通常保持：
+
+- `prior-exception-shared-subject-local-signal`
+
+只有当别的主体已经进入目标主体的局部窗口时，才会升级成：
+
+- `prior-exception-mixed-subjects-local-signal`
+
+并进一步带出：
+
+- `constraints:review-subject-scope`
+
+对 `same-chapter exemption` 的 review case，当前也开始补：
+
+- `timeline:review-same-chapter-beat`
+- `outline:review-same-chapter-scene`
+
+并与上面同一套 `local-signal` 窗口规则共用：
+
+- 窗口外才出现别的主体：只补 `canon:review-exception-evidence`
+- 窗口内已混主体：再额外补 `constraints:review-subject-scope`
+
+对 `prior-exception + claim-match`，如果这轮虽然没有具体 `event_id / scene_id`，
+但 draft 仍属于叙事型 kind，例如 `reveal / twist / backstory / event / scene / death`，
+当前 grouped summary 通常还会继续保留：
+
+- `constraints:carry-forward-exception-note`
+
+同时不一定补 `timeline:review-post-exception-beat` / `outline:review-post-exception-scene`；
+也就是说，`carry-forward` 已经不再等同于“必然有 timeline / outline target”。
+
+但如果这类 `claim-match` 叙事型 case 同时落在 `split-subjects / mixed-subjects`，
+当前 grouped summary 会优先退回：
+
+- `constraints:annotate-existing-rule-note`
+- `constraints:review-subject-scope`
+
+而不再默认保留 `constraints:carry-forward-exception-note`。
+
+如果一条 idea 同时命中多条已豁免 rule，且这些 rule 共享同一批 review token，
+当前 constraints grouped summary 还可能先提一条：
+
+- `shared-exemption-review`
+
+这条共享行通常会集中承载公共的：
+
+- `review_impacts`
+- `review_write_shapes`
+- `targets`
+- `domains`
+
+而每条具体 `rule-xxx: reuse-existing-exception` 行只再保留各自不共享的部分。
+
+如果同一组 exemption 同时混有 `direct` 和 `review`，当前 constraints grouped summary 还可能再提一条：
+
+- `shared-exemption-base`
+
+这条基础共享行通常承载：
+
+- `impacts`
+- `targets`
+- `domains`
+
+而不会重复承载已经属于 `shared-exemption-review` 的 review 专属 token。
 
 ## `state/idea-log.json`
 
