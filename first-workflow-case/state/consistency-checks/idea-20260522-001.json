@@ -1,0 +1,109 @@
+{
+  "workspace_path": "/home/zuoky/project2/first-workflow-case",
+  "idea_id": "idea-20260522-001",
+  "title": "林舟在白塔档案室发现泄密账册",
+  "checked_at": "2026-05-22T15:38:49Z",
+  "ok": true,
+  "error_count": 0,
+  "warning_count": 0,
+  "conflict_count": 0,
+  "issues": [],
+  "draft_path": "/home/zuoky/project2/first-workflow-case/state/intake-drafts/idea-20260522-001.json",
+  "draft": {
+    "idea_id": "idea-20260522-001",
+    "title": "林舟在白塔档案室发现泄密账册",
+    "kind": "reveal",
+    "tags": [
+      "林舟",
+      "由此知道议会",
+      "议会",
+      "泄密",
+      "reveal"
+    ],
+    "target_files": [
+      "outline/master-outline.md",
+      "outline/scene-index.json",
+      "timeline/events.json"
+    ],
+    "suggested_domains": [
+      "outline",
+      "timeline"
+    ],
+    "chapter_hints": [
+      3
+    ],
+    "location_candidates": [
+      "的白塔",
+      "白塔"
+    ],
+    "character_mentions": [
+      "林舟",
+      "议会"
+    ],
+    "canon_update_candidates": [],
+    "timeline_candidates": [
+      {
+        "event_label": "林舟在白塔档案室发现泄密账册",
+        "reading_chapter_hint": 3,
+        "location_candidates": [
+          "的白塔",
+          "白塔"
+        ],
+        "participant_candidates": [
+          "林舟",
+          "议会"
+        ]
+      }
+    ],
+    "outline_candidates": [
+      {
+        "scene_title": "林舟在白塔档案室发现泄密账册",
+        "chapter_hints": [
+          3
+        ],
+        "pov_candidates": [
+          "林舟",
+          "议会"
+        ],
+        "target_outline_files": [
+          "outline/master-outline.md",
+          "outline/scene-index.json"
+        ]
+      }
+    ],
+    "open_questions": [],
+    "confidence": "medium-high",
+    "created_at": "2026-05-22T15:38:49Z",
+    "content": "林舟在第三章的白塔档案室发现密账，由此知道议会内部有人泄密。"
+  },
+  "knowledge_claims": [
+    {
+      "subject_id": "char-protagonist",
+      "subject_name": "林舟",
+      "verb": "发现",
+      "object_phrase": "泄密账册",
+      "object_key": "泄密账册",
+      "chapter": 3,
+      "first_claim": false
+    },
+    {
+      "subject_id": "char-protagonist",
+      "subject_name": "林舟",
+      "verb": "知道",
+      "object_phrase": "议会内部有人泄密",
+      "object_key": "议会内部有人泄密",
+      "chapter": 3,
+      "first_claim": false
+    },
+    {
+      "subject_id": "char-protagonist",
+      "subject_name": "林舟",
+      "verb": "发现",
+      "object_phrase": "密账",
+      "object_key": "密账",
+      "chapter": 3,
+      "first_claim": false
+    }
+  ],
+  "patch_suggestions": []
+}

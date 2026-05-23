@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>白塔疑案 · 工作区总览</title>
+  <style>
+    :root {
+      --bg: #f4ecdf;
+      --panel: rgba(255, 252, 247, 0.82);
+      --panel-strong: rgba(255, 250, 242, 0.94);
+      --ink: #1f1a17;
+      --muted: #62584f;
+      --line: rgba(73, 49, 29, 0.14);
+      --accent: #9f3c17;
+      --accent-2: #c76a19;
+      --accent-soft: #f8c98d;
+      --error: #b42318;
+      --warn: #b45309;
+      --ok: #166534;
+      --shadow: 0 18px 50px rgba(79, 54, 34, 0.09);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(248, 201, 141, 0.34), transparent 28rem),
+        radial-gradient(circle at top right, rgba(193, 104, 35, 0.16), transparent 20rem),
+        radial-gradient(circle at bottom right, rgba(198, 126, 48, 0.16), transparent 24rem),
+        linear-gradient(180deg, #fbf6ee 0%, #ede2d0 100%);
+      font-family: "Iowan Old Style", "Palatino Linotype", "Baskerville", "Noto Serif SC", serif;
+    }
+    main { max-width: 1240px; margin: 0 auto; padding: 28px 20px 64px; }
+    header.hero {
+      position: relative;
+      overflow: hidden;
+      padding: 28px 30px 30px;
+      border: 1px solid var(--line);
+      background:
+        radial-gradient(circle at 85% 20%, rgba(248, 201, 141, 0.42), transparent 13rem),
+        linear-gradient(135deg, rgba(255,255,255,0.88), rgba(255,244,230,0.84));
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+    }
+    header.hero::after {
+      content: "";
+      position: absolute;
+      right: -40px;
+      top: -40px;
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(159, 60, 23, 0.10), transparent 70%);
+      pointer-events: none;
+    }
+    nav {
+      margin-top: 16px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    nav a {
+      color: var(--ink);
+      text-decoration: none;
+      border: 1px solid var(--line);
+      padding: 9px 13px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.64);
+      transition: transform 160ms ease, background 160ms ease;
+    }
+    nav a:hover {
+      transform: translateY(-1px);
+      background: rgba(255,255,255,0.9);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-top: 24px;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.95fr);
+      gap: 18px;
+      margin-top: 24px;
+      align-items: start;
+    }
+    .stack {
+      display: grid;
+      gap: 18px;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--panel);
+      backdrop-filter: blur(12px);
+      padding: 18px 20px;
+      box-shadow: 0 12px 30px rgba(82, 54, 31, 0.08);
+    }
+    .panel.strong {
+      background: var(--panel-strong);
+    }
+    .eyebrow {
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { font-size: clamp(2rem, 5vw, 3.5rem); margin-bottom: 8px; }
+    h2 { font-size: 1.22rem; margin-bottom: 12px; }
+    h3 { font-size: 1rem; margin-bottom: 8px; }
+    .metric {
+      font-size: 2.15rem;
+      font-weight: 700;
+      margin: 8px 0 0;
+    }
+    .submetric {
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin: 6px 0 0;
+    }
+    .badge {
+      display: inline-block;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 0.88rem;
+      background: rgba(154, 52, 18, 0.10);
+      color: var(--accent);
+    }
+    .badge.error { background: rgba(185, 28, 28, 0.12); color: var(--error); }
+    .badge.warning { background: rgba(180, 83, 9, 0.12); color: var(--warn); }
+    .badge.ok { background: rgba(22, 101, 52, 0.12); color: var(--ok); }
+    .badge.soft { background: rgba(99, 92, 84, 0.10); color: var(--muted); }
+    .hero-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+    }
+    .hero-copy {
+      max-width: 760px;
+      position: relative;
+      z-index: 1;
+    }
+    .hero-copy p {
+      color: var(--muted);
+      font-size: 1.02rem;
+      line-height: 1.6;
+      margin-bottom: 0;
+    }
+    .hero-rail {
+      min-width: 220px;
+      display: grid;
+      gap: 10px;
+      position: relative;
+      z-index: 1;
+    }
+    .rail-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px 16px;
+      background: rgba(255,255,255,0.66);
+    }
+    .rail-card strong {
+      display: block;
+      font-size: 1.05rem;
+      margin-bottom: 4px;
+    }
+    .story-stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 24px;
+      position: relative;
+      z-index: 1;
+    }
+    .stat-card {
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 16px 18px;
+      background: rgba(255,255,255,0.66);
+    }
+    .stat-card .eyebrow {
+      margin-bottom: 4px;
+    }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      margin-bottom: 14px;
+    }
+    .section-head p {
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin-bottom: 0;
+    }
+    .action-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .action-card {
+      display: block;
+      text-decoration: none;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+      background: rgba(255,255,255,0.62);
+      transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+    }
+    .action-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 14px 28px rgba(82, 54, 31, 0.10);
+      border-color: rgba(159, 60, 23, 0.24);
+    }
+    .action-card strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 1rem;
+    }
+    .action-card span {
+      color: var(--muted);
+      font-size: 0.94rem;
+      line-height: 1.45;
+    }
+    ul.clean { list-style: none; padding: 0; margin: 0; }
+    ul.clean li { padding: 10px 0; border-top: 1px solid var(--line); }
+    ul.clean li:first-child { border-top: none; padding-top: 0; }
+    .list-card {
+      display: grid;
+      gap: 10px;
+    }
+    .list-row {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px 15px;
+      background: rgba(255,255,255,0.58);
+    }
+    .list-row strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .meta code {
+      background: rgba(62, 40, 24, 0.07);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.95rem;
+    }
+    th, td {
+      padding: 12px 10px;
+      text-align: left;
+      border-top: 1px solid var(--line);
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 600; }
+    .empty {
+      padding: 18px;
+      border: 1px dashed var(--line);
+      border-radius: 16px;
+      color: var(--muted);
+      background: rgba(255,255,255,0.45);
+    }
+    .progress-wrap {
+      display: grid;
+      gap: 10px;
+    }
+    .progress-row {
+      display: grid;
+      gap: 7px;
+    }
+    .progress-label {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 0.95rem;
+    }
+    .progress-bar {
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(98, 88, 79, 0.12);
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    }
+    .workspace-map {
+      display: grid;
+      gap: 12px;
+    }
+    .map-item {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 12px 14px;
+      background: rgba(255,255,255,0.56);
+    }
+    .chapter-strip {
+      display: grid;
+      gap: 10px;
+    }
+    .chapter-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px 15px;
+      background: rgba(255,255,255,0.56);
+    }
+    .chapter-card p {
+      color: var(--muted);
+      margin-bottom: 0;
+      line-height: 1.5;
+    }
+    .timeline {
+      position: relative;
+      margin-top: 24px;
+      padding-left: 20px;
+    }
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 6px;
+      top: 4px;
+      bottom: 4px;
+      width: 2px;
+      background: linear-gradient(180deg, var(--accent-soft), rgba(154, 52, 18, 0.2));
+    }
+    .timeline-item {
+      position: relative;
+      margin: 0 0 16px;
+      padding: 14px 16px 14px 22px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255,255,255,0.78);
+    }
+    .timeline-item::before {
+      content: "";
+      position: absolute;
+      left: -18px;
+      top: 18px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(251, 191, 36, 0.22);
+    }
+    code {
+      background: rgba(62, 40, 24, 0.08);
+      padding: 2px 6px;
+      border-radius: 6px;
+      font-size: 0.92em;
+    }
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      .story-stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+    @media (max-width: 760px) {
+      main {
+        padding: 20px 14px 44px;
+      }
+      header.hero {
+        padding: 22px 18px 22px;
+      }
+      .hero-top {
+        flex-direction: column;
+      }
+      .hero-rail {
+        width: 100%;
+        min-width: 0;
+      }
+      .story-stats {
+        grid-template-columns: 1fr;
+      }
+      .action-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    
+    <header class="hero">
+      <div class="hero-top">
+        <div class="hero-copy">
+          <div class="eyebrow">Novel Outline Workspace</div>
+          <h1>白塔疑案</h1>
+          <p>当前最重要的是处理 merge 队列，把零散 idea 尽快转成正式 canon、timeline 和 scene。</p>
+          <nav>
+            <a href="index.html">总览</a>
+            <a href="validation-report.html">校验报告</a>
+            <a href="timeline.html">时间线</a>
+            <a href="merge-plans/">Merge Plans</a>
+          </nav>
+        </div>
+        <div class="hero-rail">
+          <div class="rail-card">
+            <div class="eyebrow">Workspace Mode</div>
+            <strong>extend-existing</strong>
+            <span class="badge warning">Pending Ideas</span>
+          </div>
+          <div class="rail-card">
+            <div class="eyebrow">Protagonist</div>
+            <strong>林舟</strong>
+            <span class="submetric">updated at 2026-05-22T15:38:49Z</span>
+          </div>
+        </div>
+      </div>
+      <div class="story-stats">
+        <article class="stat-card"><div class="eyebrow">Idea Pool</div><div class="metric">1</div><div class="submetric">pending 1 / applied 0</div></article>
+        <article class="stat-card"><div class="eyebrow">Characters</div><div class="metric">1</div><div class="submetric">正式角色索引</div></article>
+        <article class="stat-card"><div class="eyebrow">Events</div><div class="metric">0</div><div class="submetric">真实时间线节点</div></article>
+        <article class="stat-card"><div class="eyebrow">Scenes</div><div class="metric">0</div><div class="submetric">正式场景节点</div></article>
+      </div>
+    </header>
+    <section class="layout">
+      <div class="stack">
+        <article class="panel strong">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Command Desk</div>
+              <h2>下一步应该做什么</h2>
+            </div>
+            <span class="badge warning">extend-existing</span>
+          </div>
+          <div class="action-grid">
+            <a class="action-card" href="validation-report.html">
+              <strong>检查冲突与校验</strong>
+              <span>先看当前有没有硬错误、引用失效或结构缺口。</span>
+            </a>
+            <a class="action-card" href="timeline.html">
+              <strong>推进时间线</strong>
+              <span>把关键事件和阅读章节挂起来，避免剧情发展失焦。</span>
+            </a>
+            <a class="action-card" href="merge-plans/">
+              <strong>处理 Merge 队列</strong>
+              <span>把 pending idea 变成正式的 merge plan 和可执行补丁。</span>
+            </a>
+            <a class="action-card" href="consistency-checks/index.html">
+              <strong>先看 Consistency</strong>
+              <span>在并入之前先检查单条 idea 是否和现有 canon、timeline、scene 冲突。</span>
+            </a>
+            <a class="action-card" href="../state/workspace-status.json">
+              <strong>检查状态源</strong>
+              <span>直接回到 JSON 真相源确认 mode、counts 和最新校验时间。</span>
+            </a>
+          </div>
+          <p class="submetric" style="margin-top: 16px;">优先处理 pending ideas，并把确认内容并入 canon / outline / timeline。</p>
+        </article>
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Merge Desk</div>
+              <h2>Pending Ideas</h2>
+            </div>
+            <span class="badge warning">1 waiting</span>
+          </div>
+          <div class="list-card">
+        <div class="list-row">
+          <strong>林舟在白塔档案室发现泄密账册</strong>
+          <div>林舟在第三章的白塔档案室发现密账，由此知道议会内部有人泄密。</div>
+          <div class="meta">
+            <span class="badge warning">reveal</span>
+            <code>idea-20260522-001</code>
+          </div>
+        </div>
+        </div>
+        </article>
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Story Surface</div>
+              <h2>最近事件与章节</h2>
+            </div>
+            <p>首页优先呈现当前最关键的剧情骨架。</p>
+          </div>
+          <div class="grid" style="margin-top: 0;">
+            <div class="panel strong">
+              <h3>Recent Events</h3>
+              <div class="list-card"><div class="empty">还没有正式事件。时间线页目前会保持空白。</div></div>
+            </div>
+            <div class="panel strong">
+              <h3>Chapter Snapshot</h3>
+              <div class="chapter-strip"><div class="empty">还没有章节卡片。先补 `outline/scene-index.json`。</div></div>
+            </div>
+          </div>
+        </article>
+      </div>
+      <div class="stack">
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Health</div>
+              <h2>工作区健康度</h2>
+            </div>
+            <span class="badge ok">stable</span>
+          </div>
+          <div class="progress-wrap">
+            <div class="progress-row">
+              <div class="progress-label"><span>Core Files</span><span>100%</span></div>
+              <div class="progress-bar"><div class="progress-fill" style="width: 100%;"></div></div>
+            </div>
+            <div class="progress-row">
+              <div class="progress-label"><span>Structure Coverage</span><span>0%</span></div>
+              <div class="progress-bar"><div class="progress-fill" style="width: 0%;"></div></div>
+            </div>
+            <div class="progress-row">
+              <div class="progress-label"><span>Merge Queue Health</span><span>0%</span></div>
+              <div class="progress-bar"><div class="progress-fill" style="width: 0%;"></div></div>
+            </div>
+          </div>
+          <div class="meta" style="margin-top: 14px;">
+            <span class="badge ok">errors 0</span>
+            <span class="badge warning">warnings 2</span>
+            <span class="badge soft">applied 0</span>
+          </div>
+        </article>
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Consistency Gate</div>
+              <h2>Recent Consistency Checks</h2>
+            </div>
+            <span class="badge soft">1 visible</span>
+          </div>
+          <div class="list-card">
+        <div class="list-row">
+          <strong>林舟在白塔档案室发现泄密账册</strong>
+          <div>conflicts 0 / warnings 0</div>
+          <div class="meta">
+            <code>idea-20260522-001</code>
+            <span class="badge ok">clear</span>
+          </div>
+        </div>
+        </div>
+        </article>
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Latest Plans</div>
+              <h2>Merge Plans</h2>
+            </div>
+            <span class="badge soft">1 visible</span>
+          </div>
+          <div class="list-card">
+        <div class="list-row">
+          <strong>林舟在白塔档案室发现泄密账册</strong>
+          <div>canon / outline / timeline</div>
+          <div class="meta">
+            <code>idea-20260522-001</code>
+            <span class="badge soft">2026-05-22T15:38:49Z</span>
+          </div>
+        </div>
+        </div>
+        </article>
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Workspace Map</div>
+              <h2>核心文件状态</h2>
+            </div>
+            <p>确保工作台始终有可用的状态源。</p>
+          </div>
+          <div class="workspace-map">
+        <div class="map-item">
+          <div>
+            <strong>state/canon-index.json</strong>
+            <div class="submetric">核心状态文件</div>
+          </div>
+          <span class="badge ok">ready</span>
+        </div>
+        
+
+        <div class="map-item">
+          <div>
+            <strong>state/idea-log.json</strong>
+            <div class="submetric">核心状态文件</div>
+          </div>
+          <span class="badge ok">ready</span>
+        </div>
+        
+
+        <div class="map-item">
+          <div>
+            <strong>state/workspace-status.json</strong>
+            <div class="submetric">核心状态文件</div>
+          </div>
+          <span class="badge ok">ready</span>
+        </div>
+        
+
+        <div class="map-item">
+          <div>
+            <strong>timeline/events.json</strong>
+            <div class="submetric">核心状态文件</div>
+          </div>
+          <span class="badge ok">ready</span>
+        </div>
+        
+
+        <div class="map-item">
+          <div>
+            <strong>outline/scene-index.json</strong>
+            <div class="submetric">核心状态文件</div>
+          </div>
+          <span class="badge ok">ready</span>
+        </div>
+        </div>
+        </article>
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Latest Validation</div>
+              <h2>校验摘要</h2>
+            </div>
+          </div>
+          <p>validated_at: <code>2026-05-22T15:38:49Z</code></p>
+          <p>report_path: <code>/home/zuoky/project2/first-workflow-case/views/validation-report.html</code></p>
+          <p class="submetric">优先处理 pending ideas，并把确认内容并入 canon / outline / timeline。</p>
+        </article>
+      </div>
+    </section>
+    <section class="grid">
+      <article class="panel">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Reality Check</div>
+            <h2>工作区事实面</h2>
+          </div>
+          <span class="badge soft">source of truth</span>
+        </div>
+        <p>当前事实层以 `state/*.json`、`timeline/events.json`、`outline/scene-index.json` 为准。HTML 负责展示，不反向作为编辑真相源。</p>
+      </article>
+      <article class="panel">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Operating Note</div>
+            <h2>操作节奏</h2>
+          </div>
+        </div>
+        <p>推荐节奏：先收 idea，再做 merge plan，再结构化 apply，最后跑 validator 和 HTML 重渲染。</p>
+      </article>
+    </section>
+    
+  </main>
+</body>
+</html>

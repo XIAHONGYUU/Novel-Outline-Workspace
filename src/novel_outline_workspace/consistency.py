@@ -303,6 +303,18 @@ def _knowledge_object_family_core(text: str) -> str:
     return updated
 
 
+def _normalize_knowledge_object_claim_family_base(family: str, base: str) -> str:
+    normalized = str(base or "").strip("的")
+    if family == "leak":
+        normalized = re.sub(r"(?:内部)?有人$", "", normalized)
+        normalized = re.sub(r"有$", "", normalized)
+    if family == "same-camp":
+        normalized = re.sub(r"是$", "", normalized)
+    if family in {"same-camp", "separate-camp"} and normalized in {"他们", "二者", "双方", "两边", "两方", "两者"}:
+        return ""
+    return normalized.strip("的")
+
+
 def _knowledge_object_claim_family_signature(text: str) -> tuple[str, str] | None:
     core = _knowledge_object_family_core(text)
     family = _knowledge_object_tail_family(core)
@@ -315,20 +327,58 @@ def _knowledge_object_claim_family_signature(text: str) -> tuple[str, str] | Non
         "separate-camp": "不是同阵营",
     }.get(family, "")
     base = core[: -len(family_suffix)] if family_suffix and core.endswith(family_suffix) else core
-    return family, base.strip("的")
+    return family, _normalize_knowledge_object_claim_family_base(family, base)
 
 
 def _is_generic_knowledge_object_for_claim_dedupe(text: str) -> bool:
+    signature = _knowledge_object_claim_family_signature(text)
+    if signature and not signature[1]:
+        return True
     core = _knowledge_object_family_core(text)
     family = _knowledge_object_tail_family(core)
     return bool(family and core in {"身份", "泄密", "同阵营", "不是同阵营"})
+
+
+def _knowledge_object_claim_wording_rank(text: str) -> int:
+    raw = str(text or "")
+    signature = _knowledge_object_claim_family_signature(text)
+    family = signature[0] if signature else None
+    if family == "identity":
+        if "是谁" in raw:
+            return 3
+        if any(token in raw for token in ("真实身份", "真正身份", "身份")):
+            return 2
+        if "真身" in raw:
+            return 1
+    if family == "leak":
+        if "内部有人泄密" in raw:
+            return 3
+        if "有人泄密" in raw or "泄密" in raw:
+            return 2
+        if "内鬼" in raw:
+            return 1
+    if family == "same-camp":
+        if "同一阵营" in raw or "同阵营" in raw:
+            return 3
+        if "一路人" in raw or "一路" in raw:
+            return 2
+        if "一伙人" in raw or "一伙" in raw or "同伙" in raw:
+            return 1
+    if family == "separate-camp":
+        if "不是同一阵营" in raw or "并非同一阵营" in raw or "不是同阵营" in raw:
+            return 3
+        if "不是一路人" in raw or "不是一路" in raw:
+            return 2
+        if "不是一伙人" in raw or "不是一伙" in raw:
+            return 1
+    return 0
 
 
 def _knowledge_object_claim_specificity(text: str) -> tuple[int, int]:
     signature = _knowledge_object_claim_family_signature(text)
     family_base = signature[1] if signature else ""
     normalized = _canonicalize_knowledge_match_text(text)
-    return (len(family_base), len(normalized))
+    return (len(family_base), _knowledge_object_claim_wording_rank(text), len(normalized))
 
 
 def _dedupe_subject_knowledge_claims(claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -434,6 +484,49 @@ def _knowledge_record_priority(record_type: str) -> int:
     if record_type == "event":
         return 1
     return 0
+
+
+def _matching_knowledge_signal_for_record(
+    record: dict[str, Any],
+    *,
+    claim_object_key: str,
+    removable_terms: list[str],
+) -> dict[str, Any] | None:
+    if record.get("record_type") == "canon-knowledge-state":
+        signal = record.get("signal", {})
+        return signal if _knowledge_objects_match(claim_object_key, str(signal.get("object_key") or "")) else None
+
+    signals = _extract_knowledge_signals(str(record.get("text") or ""), removable_terms)
+    return next((signal for signal in signals if _knowledge_objects_match(claim_object_key, signal["object_key"])), None)
+
+
+def _knowledge_signals_near_subject(
+    text: str,
+    *,
+    subject_terms: list[str],
+    all_subject_terms: list[str],
+) -> list[dict[str, Any]]:
+    haystack = str(text or "")
+    normalized_subject_terms = [str(term).strip() for term in subject_terms if str(term).strip()]
+    normalized_all_subject_terms = [str(term).strip() for term in all_subject_terms if str(term).strip()]
+    signals: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for term in normalized_subject_terms:
+        start = 0
+        while True:
+            subject_index = haystack.find(term, start)
+            if subject_index < 0:
+                break
+            window_end = _subject_window_end(haystack, subject_index, len(term), normalized_all_subject_terms)
+            window = haystack[subject_index:window_end]
+            for signal in _extract_knowledge_signals(window, normalized_subject_terms):
+                key = (str(signal.get("verb") or ""), str(signal.get("object_key") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                signals.append(signal)
+            start = subject_index + len(term)
+    return signals
 
 
 def _extract_knowledge_signals(text: str, removable_terms: list[str] | None = None) -> list[dict[str, Any]]:
@@ -713,38 +806,32 @@ def _check_knowledge_state_conflicts(
     for claim in knowledge_claims:
         subject_id = claim["subject_id"]
         subject_name = claim["subject_name"]
-        if any(
-            str(item.get("subject_id") or "").strip() == subject_id
-            and str(item.get("object_key") or "").strip() == str(claim.get("object_key") or "").strip()
-            and item.get("reading_chapter") == claim["chapter"]
-            for item in canon_index.get("knowledge_states", [])
-        ):
-            continue
         terms = character_terms_by_id.get(subject_id) or [subject_name]
+        same_chapter_matches: list[dict[str, Any]] = []
         prior_matches: list[dict[str, Any]] = []
         future_matches: list[dict[str, Any]] = []
         for record in records:
             record_chapter = record.get("chapter")
             if subject_id not in record["participants"] or not isinstance(record_chapter, int):
                 continue
-            if record_chapter == claim["chapter"]:
-                continue
-            if record.get("record_type") == "canon-knowledge-state":
-                signal = record.get("signal", {})
-                matched_signal = signal if _knowledge_objects_match(claim["object_key"], str(signal.get("object_key") or "")) else None
-            else:
-                signals = _extract_knowledge_signals(str(record.get("text") or ""), terms)
-                matched_signal = next(
-                    (signal for signal in signals if _knowledge_objects_match(claim["object_key"], signal["object_key"])),
-                    None,
-                )
+            matched_signal = _matching_knowledge_signal_for_record(
+                record,
+                claim_object_key=str(claim.get("object_key") or ""),
+                removable_terms=terms,
+            )
             if matched_signal is None:
                 continue
             candidate = {"record": record, "signal": matched_signal}
+            if record_chapter == claim["chapter"]:
+                same_chapter_matches.append(candidate)
+                continue
             if record_chapter < claim["chapter"]:
                 prior_matches.append(candidate)
             else:
                 future_matches.append(candidate)
+
+        if same_chapter_matches:
+            continue
 
         if prior_matches:
             prior_match = max(
@@ -1031,6 +1118,11 @@ def _check_relationship_history_conflicts(
     relationship_state = _relationship_state_from_token(relation_token)
     if relationship_state is None:
         return
+    if any(
+        str(beat.get("state")) == relationship_state and beat.get("chapter") == draft_chapter
+        for beat in relationship_history
+    ):
+        return
     latest_prior_same = None
     earliest_future_same = None
     for beat in relationship_history:
@@ -1127,6 +1219,15 @@ def _rule_subject_id(rule_subject: str, canon_index: dict[str, Any]) -> str | No
     return token_to_id.get(_normalize_text(rule_subject))
 
 
+def _rule_subject_terms(rule_subject: str, rule_subject_id: str | None, canon_index: dict[str, Any]) -> list[str]:
+    if rule_subject_id:
+        terms = _character_terms_by_id(canon_index).get(rule_subject_id, [])
+        if terms:
+            return terms
+    value = str(rule_subject or "").strip()
+    return [value] if value else []
+
+
 def _subject_matches_rule(
     *,
     subject_id: Any,
@@ -1138,6 +1239,39 @@ def _subject_matches_rule(
     if rule_subject_id and str(subject_id or "").strip() == rule_subject_id:
         return True
     return _normalize_text(subject_name) == normalized_rule_subject
+
+
+def _world_rule_context_subject_scope(
+    draft: dict[str, Any],
+    knowledge_claims: list[dict[str, Any]],
+    *,
+    rule_subject: str,
+) -> str:
+    context_subjects = {
+        str(claim.get("subject_name") or "").strip()
+        for claim in knowledge_claims
+        if str(claim.get("subject_name") or "").strip()
+    }
+    context_subjects.update(
+        str(item).strip()
+        for item in draft.get("character_mentions", [])
+        if str(item).strip()
+    )
+    normalized_rule_subject = str(rule_subject or "").strip()
+    if normalized_rule_subject:
+        context_subjects.add(normalized_rule_subject)
+    if len(context_subjects) <= 1:
+        return "shared-subject"
+    return "split-subjects"
+
+
+def _world_rule_exemption_scope_token(
+    *,
+    base_scope: str,
+    subject_scope: str,
+    match_mode: str,
+) -> str:
+    return f"{base_scope}-{subject_scope}-{match_mode}"
 
 
 def _claim_matches_world_rule(
@@ -1158,17 +1292,19 @@ def _claim_matches_world_rule(
     )
 
 
-def _has_matching_world_rule_exception(
+def _matching_world_rule_exception(
     canon_index: dict[str, Any],
     *,
     rule_id: str,
     draft_chapter: int,
-    normalized_haystack: str,
+    haystack: str,
     knowledge_claims: list[dict[str, Any]],
     rule_subject: str,
     rule_object: str,
-) -> bool:
+) -> dict[str, Any] | None:
     rule_subject_id = _rule_subject_id(rule_subject, canon_index)
+    rule_subject_terms = _rule_subject_terms(rule_subject, rule_subject_id, canon_index)
+    all_subject_terms = _rule_subject_candidates(canon_index)
     for exception in canon_index.get("world_rule_exceptions", []):
         if str(exception.get("rule_id") or "").strip() != rule_id:
             continue
@@ -1194,16 +1330,16 @@ def _has_matching_world_rule_exception(
                 )
                 for claim in knowledge_claims
             ):
-                return True
+                return dict(exception)
             continue
-        subject_name = _normalize_text(exception.get("subject_name") or "")
-        object_key = _normalize_text(exception_object)
-        if subject_name and subject_name not in normalized_haystack:
-            continue
-        if object_key and object_key not in normalized_haystack:
-            continue
-        return True
-    return False
+        local_signals = _knowledge_signals_near_subject(
+            haystack,
+            subject_terms=rule_subject_terms,
+            all_subject_terms=all_subject_terms,
+        )
+        if any(_knowledge_objects_match(exception_object, str(signal.get("object_key") or "")) for signal in local_signals):
+            return dict(exception)
+    return None
 
 
 def _check_world_rule_conflicts(
@@ -1213,6 +1349,7 @@ def _check_world_rule_conflicts(
     events: list[dict[str, Any]],
     knowledge_claims: list[dict[str, Any]],
     issues: list[dict[str, Any]],
+    exemptions: list[dict[str, Any]],
 ) -> None:
     draft_chapter = _primary_chapter_hint(draft)
     if draft_chapter is None:
@@ -1221,7 +1358,6 @@ def _check_world_rule_conflicts(
     constraints = read_json(workspace / "constraints/constraints.json", {"rules": []})
     event_map = {item.get("id"): item for item in events if item.get("id")}
     haystack = f"{draft.get('title', '')}\n{draft.get('content', '')}"
-    normalized_haystack = _normalize_text(haystack)
     for rule in constraints.get("rules", []):
         if rule.get("type") != "hard-canon":
             continue
@@ -1243,18 +1379,71 @@ def _check_world_rule_conflicts(
             )
         ]
         matched_claim = matching_claims[0] if matching_claims else {}
-        subject_hit = bool(matching_claims) or (_normalize_text(subject_key) in normalized_haystack)
-        object_hit = bool(matching_claims) or (_normalize_text(object_key) in normalized_haystack)
-        positive_hit = bool(matching_claims) or (not positive_token) or (_normalize_text(positive_token) in normalized_haystack)
-        if _has_matching_world_rule_exception(
+        local_signals = _knowledge_signals_near_subject(
+            haystack,
+            subject_terms=_rule_subject_terms(subject_key, rule_subject_id, canon_index),
+            all_subject_terms=_rule_subject_candidates(canon_index),
+        )
+        subject_hit = bool(matching_claims) or bool(local_signals)
+        object_hit = bool(matching_claims) or any(
+            _knowledge_objects_match(object_key, str(signal.get("object_key") or ""))
+            for signal in local_signals
+        )
+        positive_hit = bool(matching_claims) or any(str(signal.get("verb") or "").strip() for signal in local_signals) or not positive_token
+        matched_exception = _matching_world_rule_exception(
             canon_index,
             rule_id=str(rule.get("id") or ""),
             draft_chapter=draft_chapter,
-            normalized_haystack=normalized_haystack,
+            haystack=haystack,
             knowledge_claims=matching_claims,
             rule_subject=subject_key,
             rule_object=object_key,
-        ):
+        )
+        if matched_exception is not None:
+            exception_chapter = matched_exception.get("reading_chapter")
+            exception_scope_base = (
+                "same-chapter"
+                if isinstance(exception_chapter, int) and exception_chapter == draft_chapter
+                else "prior-exception"
+            )
+            exception_subject_scope = _world_rule_context_subject_scope(
+                draft,
+                knowledge_claims,
+                rule_subject=subject_key,
+            )
+            exception_match_mode = "claim-match" if matching_claims else "local-signal"
+            exemptions.append(
+                {
+                    "level": "info",
+                    "code": "world-rule-exemption-applied",
+                    "message": (
+                        f"这条 idea 命中了约束 `{rule.get('label')}`，但已有正式 exception "
+                        f"`{matched_exception.get('id')}` 放行当前 chapter 的知情变化。"
+                    ),
+                    "path": "state/canon-index.json",
+                    "details": {
+                        "rule_id": rule.get("id"),
+                        "rule_label": rule.get("label"),
+                        "rule_subject": subject_key,
+                        "rule_object": object_key,
+                        "draft_chapter": draft_chapter,
+                        "matched_exception_id": matched_exception.get("id"),
+                        "matched_exception_subject_id": matched_exception.get("subject_id"),
+                        "matched_exception_subject_name": matched_exception.get("subject_name"),
+                        "matched_exception_object_key": matched_exception.get("object_key"),
+                        "matched_exception_object_phrase": matched_exception.get("object_phrase"),
+                        "matched_exception_chapter": exception_chapter,
+                        "exception_scope_base": exception_scope_base,
+                        "exception_subject_scope": exception_subject_scope,
+                        "exception_match_mode": exception_match_mode,
+                        "exception_scope": _world_rule_exemption_scope_token(
+                            base_scope=exception_scope_base,
+                            subject_scope=exception_subject_scope,
+                            match_mode=exception_match_mode,
+                        ),
+                    },
+                }
+            )
             continue
         if subject_hit and object_hit and positive_hit and draft_chapter <= cutoff_chapter:
             _append_issue(
@@ -1470,6 +1659,20 @@ def _render_consistency_html(report: dict[str, Any]) -> str:
         if suggestion_rows
         else '<div class="empty">当前没有额外 patch 建议。</div>'
     )
+    exemption_rows = "\n".join(
+        "<tr>"
+        f"<td><code>{_safe(item.get('code'))}</code></td>"
+        f"<td>{_safe(item.get('message'))}</td>"
+        f"<td><code>{_safe((item.get('details', {}) or {}).get('exception_scope') or '-')}</code></td>"
+        f"<td><code>{_safe((item.get('details', {}) or {}).get('matched_exception_id') or '-')}</code></td>"
+        "</tr>"
+        for item in report.get("exemptions", [])
+    )
+    exemption_markup = (
+        f"<table><thead><tr><th>Code</th><th>Message</th><th>Scope</th><th>Exception</th></tr></thead><tbody>{exemption_rows}</tbody></table>"
+        if exemption_rows
+        else '<div class="empty">当前没有命中的正式豁免记录。</div>'
+    )
     draft = report.get("draft", {})
     knowledge_claims = report.get("knowledge_claims", [])
     knowledge_claim_markup = "\n".join(
@@ -1508,6 +1711,10 @@ def _render_consistency_html(report: dict[str, Any]) -> str:
       {issue_markup}
     </section>
     <section class="panel" style="margin-top: 24px;">
+      <h2>Exemptions</h2>
+      {exemption_markup}
+    </section>
+    <section class="panel" style="margin-top: 24px;">
       <h2>Patch Suggestions</h2>
       {suggestion_markup}
     </section>
@@ -1519,6 +1726,7 @@ def check_idea_consistency(workspace: Path, idea_id: str) -> dict[str, Any]:
     workspace = workspace.expanduser().resolve()
     idea = _find_idea(workspace, idea_id)
     issues: list[dict[str, Any]] = []
+    exemptions: list[dict[str, Any]] = []
     draft_path, draft = _load_intake_draft(workspace, idea)
 
     if draft is None:
@@ -1550,7 +1758,7 @@ def check_idea_consistency(workspace: Path, idea_id: str) -> dict[str, Any]:
     _check_knowledge_state_conflicts(knowledge_claims, canon_index, character_terms_by_id, events, scene_records, issues)
     _check_first_meeting_conflicts(draft, resolved_character_ids, id_to_name, events, scene_records, issues)
     _check_relationship_history_conflicts(draft, canon_index, resolved_character_ids, id_to_name, events, scene_records, issues)
-    _check_world_rule_conflicts(draft, workspace, canon_index, events, knowledge_claims, issues)
+    _check_world_rule_conflicts(draft, workspace, canon_index, events, knowledge_claims, issues, exemptions)
 
     error_count = sum(1 for issue in issues if issue.get("level") == "error")
     warning_count = sum(1 for issue in issues if issue.get("level") == "warning")
@@ -1567,6 +1775,7 @@ def check_idea_consistency(workspace: Path, idea_id: str) -> dict[str, Any]:
         "warning_count": warning_count,
         "conflict_count": conflict_count,
         "issues": issues,
+        "exemptions": exemptions,
         "draft_path": str(draft_path),
         "draft": draft,
         "knowledge_claims": knowledge_claims,

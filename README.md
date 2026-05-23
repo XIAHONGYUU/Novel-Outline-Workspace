@@ -32,7 +32,7 @@
 
 ## 当前状态
 
-到 `2026-05-22` 为止，主链路已经推进到：
+到 `2026-05-23` 为止，主链路已经推进到：
 
 `ingest -> check-consistency -> plan-merge -> apply-merge -> validate`
 
@@ -67,18 +67,36 @@
   并开始区分哪些 rule 仍在同一主体链上、哪些 exception 需要按 `split-subjects` 分开解释，
   同一主体下若标题和正文同时抽到泛化 object 与更具体 object，claim 层会优先收敛到更具体那条，
   多主体句子里如果前后主体对应不同 object，claim 层也会优先按主体窗口拆开，避免把后一个主体的 object 串回前一个主体，
-  `identity` family 里像“首领身份 / 组织首领是谁”这类近义 object，claim 层也开始优先保留更具体那条，
+  `identity / leak / same-camp / separate-camp` family 里更短概括表达与更长具体表达并存时，claim 层也开始优先保留更具体那条，
+  同一 family 内如果只是“标准表达 / 口语表达”差异，也会优先保留更标准的 wording，
+  而 cross-family 的 claim 目前仍会保持分离，避免把不同事实误合并，
+  `world-rule` 在缺少 `knowledge_claims` 时也开始按主体局部窗口抽取 knowledge signal，
+  因此同章 exception 的同义 object 不再只靠全句字面串命中，mixed-subject 句子里别人的 object 也不会再误算到当前 rule subject 身上，
+  对已落地的 exception，constraints explainer 现在也开始区分哪些可 `direct` 沿用、哪些仍需 `review`，
+  并把“仍有冲突的 rule”和“已有豁免的 rule”收敛进同一组 grouped summary，
+  `exception_scope` 本身也开始细分成 `chapter scope / subject scope / match mode` 三层稳定 token，
   canon 侧 exception explainer 也会对齐到各自命中的 claim，
   重复的 timeline / outline 说明会优先收敛成一条更高可执行性的版本
 - graph-aware consistency exemptions
-  `knowledge-state` 已开始豁免后文复述型知情记录，`relationship-history` 已开始豁免有显式状态转移后的未来重复状态
+  `knowledge-state` 已开始豁免后文复述型知情记录，
+  如果同章已经有正式 event / scene / canon 知情记录，也不会再被更晚重复记录误报成前移；
+  `relationship-history` 已开始豁免有显式状态转移后的未来重复状态，
+  如果同章已经有正式关系 beat，也不会再被未来同状态记录误报成漂移；
+  对 `world-rule`，consistency report 现在也开始显式写出已命中的正式 exemption，而不再只静默放行
+
+仓库内当前也附带两个可直接查看的样本工作区：
+
+- `demo-workspace/`
+  作为持续演化的综合示例
+- `first-workflow-case/`
+  作为第一个独立 workflow 案例，当前停在 `clear consistency gate + ready merge plan`
 
 下一步重点不再是补“有没有入口”，而是增强：
 
 - `novel-timeline-merge`
 - 更细的 timeline-order / knowledge-state 规则
 - 更细的 relationship / world-rule exception 边界
-- 更多 object family 的 claim 收敛
+- 继续扩到更多 object family 的 claim 收敛
 - grouped summary 与逐条 explainer 的进一步压缩
 - repair / merge explainers 的进一步收敛
 

@@ -360,22 +360,43 @@ def _world_rule_subject_scope(rule_subjects: set[str], all_subjects: set[str]) -
     return "split-subjects"
 
 
-def _constraints_group_explainer(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _split_world_rule_exemption_scope(scope: str) -> tuple[str, str, str]:
+    parts = [part.strip() for part in str(scope or "").split("-") if part.strip()]
+    if len(parts) >= 5:
+        return "-".join(parts[:2]), "-".join(parts[2:4]), "-".join(parts[4:])
+    if len(parts) >= 3:
+        return parts[0], parts[1], "-".join(parts[2:])
+    return str(scope or "").strip(), "", ""
+
+
+def _world_rule_exemption_bucket(exception_scopes: set[str]) -> str:
+    normalized_scopes = {str(scope).strip() for scope in exception_scopes if str(scope).strip()}
+    if normalized_scopes and all(
+        _split_world_rule_exemption_scope(scope) == ("same-chapter", "shared-subject", "claim-match")
+        for scope in normalized_scopes
+    ):
+        return "direct"
+    return "review"
+
+
+def _draft_domains_for_exemption_review(draft: dict[str, Any]) -> set[str]:
+    domains = {
+        str(item).strip()
+        for item in draft.get("suggested_domains", [])
+        if str(item).strip()
+    }
+    if not domains:
+        kind = str(draft.get("kind") or "").strip().lower()
+        domains.update(KIND_DOMAIN_MAP.get(kind, []))
+    return domains
+
+
+def _constraints_group_explainer(items: list[dict[str, Any]], report: dict[str, Any], draft: dict[str, Any]) -> dict[str, Any] | None:
     world_rule_items = [
         item
         for item in items
         if str(item.get("source_issue_code") or "") == "world-rule-conflict"
     ]
-    rule_ids = sorted(
-        {
-            str((item.get("apply_args", {}) or {}).get("rule_id") or "").strip()
-            for item in world_rule_items
-            if str((item.get("apply_args", {}) or {}).get("rule_id") or "").strip()
-        }
-    )
-    if len(rule_ids) < 2:
-        return None
-
     strategies_by_rule: dict[str, list[str]] = {}
     targets_by_rule: dict[str, set[str]] = {}
     domains_by_rule: dict[str, set[str]] = {}
@@ -411,40 +432,163 @@ def _constraints_group_explainer(items: list[dict[str, Any]]) -> dict[str, Any] 
         if item.get("requires_override"):
             override_by_rule[rule_id] = override_by_rule.get(rule_id, 0) + 1
 
+    exemptions = [
+        item
+        for item in report.get("exemptions", [])
+        if str(item.get("code") or "") == "world-rule-exemption-applied"
+    ]
+    exception_ids_by_rule: dict[str, set[str]] = {}
+    exception_scopes_by_rule: dict[str, set[str]] = {}
+    exemption_direct_by_rule: dict[str, int] = {}
+    exemption_review_by_rule: dict[str, int] = {}
+    for item in exemptions:
+        details = item.get("details", {}) if isinstance(item.get("details"), dict) else {}
+        rule_id = str(details.get("rule_id") or "").strip()
+        if not rule_id:
+            continue
+        subject = str(details.get("matched_exception_subject_name") or details.get("rule_subject") or "").strip()
+        if subject:
+            subjects_by_rule.setdefault(rule_id, set()).add(subject)
+        scope = str(details.get("exception_scope") or "").strip()
+        if scope:
+            exception_scopes_by_rule.setdefault(rule_id, set()).add(scope)
+        exception_id = str(details.get("matched_exception_id") or "").strip()
+        if exception_id:
+            exception_ids_by_rule.setdefault(rule_id, set()).add(exception_id)
+        targets_by_rule.setdefault(rule_id, set()).update({"state/canon-index.json", "constraints/constraints.json", "canon/world-rules.md"})
+        domains_by_rule.setdefault(rule_id, set()).update({"canon", "constraints"})
+        impacts_by_rule.setdefault(rule_id, set()).update({"canon:reuse-exception", "constraints:reuse-exception"})
+
     all_subjects = {
         subject
         for subjects in subjects_by_rule.values()
         for subject in subjects
         if str(subject).strip()
     }
-    planned_writes = [
-        (
+    all_subjects.update(
+        str(item).strip()
+        for item in draft.get("character_mentions", [])
+        if str(item).strip()
+    )
+    conflict_rule_ids = sorted(strategies_by_rule.keys())
+    exemption_rule_ids = sorted(exception_ids_by_rule.keys() | exception_scopes_by_rule.keys())
+    rule_ids = sorted(set(conflict_rule_ids) | set(exemption_rule_ids))
+    if not rule_ids:
+        return None
+    if len(conflict_rule_ids) < 2 and not exemption_rule_ids:
+        return None
+
+    all_targets: set[str] = set()
+    planned_writes: list[str] = []
+    overall_readiness = "ready"
+    for rule_id in rule_ids:
+        all_targets.update(targets_by_rule.get(rule_id, set()))
+        subject_scope = _world_rule_subject_scope(subjects_by_rule.get(rule_id, set()), all_subjects)
+        if rule_id in conflict_rule_ids:
+            line = (
+                f"{rule_id}: "
+                f"{', '.join(strategies_by_rule.get(rule_id, [])) or 'review'}"
+                f" | direct={direct_by_rule.get(rule_id, 0)}"
+                f" | override={override_by_rule.get(rule_id, 0)}"
+                f" | subjects={', '.join(sorted(subjects_by_rule.get(rule_id, set())))}"
+                f" | subject_scope={subject_scope}"
+                f" | domains={', '.join(sorted(domains_by_rule.get(rule_id, set())))}"
+                f" | impacts={', '.join(sorted(impacts_by_rule.get(rule_id, set())))}"
+                f" | direct_impacts={', '.join(sorted(direct_impacts_by_rule.get(rule_id, set())))}"
+                f" | review_impacts={', '.join(sorted(review_impacts_by_rule.get(rule_id, set())))}"
+                f" | targets={', '.join(sorted(targets_by_rule.get(rule_id, set())))}"
+            )
+            planned_writes.append(line)
+            overall_readiness = "needs-review"
+            continue
+
+        exception_scopes = exception_scopes_by_rule.get(rule_id, set())
+        reuse_bucket = _world_rule_exemption_bucket(exception_scopes)
+        exception_scope_bases = {
+            base_scope
+            for base_scope, _, _ in (_split_world_rule_exemption_scope(scope) for scope in exception_scopes)
+            if base_scope
+        }
+        exception_subject_scopes = {
+            token_subject_scope
+            for _, token_subject_scope, _ in (_split_world_rule_exemption_scope(scope) for scope in exception_scopes)
+            if token_subject_scope
+        }
+        exception_match_modes = {
+            match_mode
+            for _, _, match_mode in (_split_world_rule_exemption_scope(scope) for scope in exception_scopes)
+            if match_mode
+        }
+        if reuse_bucket == "direct":
+            exemption_direct_by_rule[rule_id] = 1
+            direct_impacts_by_rule.setdefault(rule_id, set()).update({"canon:reuse-exception", "constraints:reuse-exception"})
+        else:
+            exemption_review_by_rule[rule_id] = 1
+            review_impacts = {"canon:reuse-exception", "constraints:reuse-exception"}
+            if "prior-exception" in exception_scope_bases:
+                review_impacts.update(
+                    {
+                        "canon:review-exception-continuity",
+                        "constraints:review-exception-chain",
+                        "timeline:review-post-exception-beat",
+                        "outline:review-post-exception-scene",
+                    }
+                )
+                targets_by_rule.setdefault(rule_id, set()).update({"timeline/events.json", "outline/scene-index.json"})
+                exemption_review_domains = _draft_domains_for_exemption_review(draft)
+                domains_by_rule.setdefault(rule_id, set()).update({"timeline", "outline"} & exemption_review_domains or {"timeline", "outline"})
+            if any(scope in {"split-subjects", "mixed-subjects", "review-subject"} for scope in exception_subject_scopes):
+                review_impacts.add("constraints:review-subject-scope")
+            if "local-signal" in exception_match_modes:
+                review_impacts.add("canon:review-exception-evidence")
+            review_impacts_by_rule.setdefault(rule_id, set()).update(review_impacts)
+            overall_readiness = "needs-review"
+        line = (
             f"{rule_id}: "
-            f"{', '.join(strategies_by_rule.get(rule_id, [])) or 'review'}"
-            f" | direct={direct_by_rule.get(rule_id, 0)}"
-            f" | override={override_by_rule.get(rule_id, 0)}"
+            f"reuse-existing-exception"
+            f" | direct={exemption_direct_by_rule.get(rule_id, 0)}"
+            f" | review={exemption_review_by_rule.get(rule_id, 0)}"
+            f" | exceptions={', '.join(sorted(exception_ids_by_rule.get(rule_id, set()))) or 'existing'}"
             f" | subjects={', '.join(sorted(subjects_by_rule.get(rule_id, set())))}"
-            f" | subject_scope={_world_rule_subject_scope(subjects_by_rule.get(rule_id, set()), all_subjects)}"
+            f" | subject_scope={subject_scope}"
+            f" | exception_scope={', '.join(sorted(exception_scopes))}"
+            f" | exception_scope_base={', '.join(sorted(exception_scope_bases))}"
+            f" | exception_subject_scope={', '.join(sorted(exception_subject_scopes))}"
+            f" | exception_match_mode={', '.join(sorted(exception_match_modes))}"
             f" | domains={', '.join(sorted(domains_by_rule.get(rule_id, set())))}"
             f" | impacts={', '.join(sorted(impacts_by_rule.get(rule_id, set())))}"
             f" | direct_impacts={', '.join(sorted(direct_impacts_by_rule.get(rule_id, set())))}"
             f" | review_impacts={', '.join(sorted(review_impacts_by_rule.get(rule_id, set())))}"
             f" | targets={', '.join(sorted(targets_by_rule.get(rule_id, set())))}"
         )
-        for rule_id in rule_ids
-    ]
-    summary = f"当前这条 idea 同时触发了 {len(rule_ids)} 条 world-rule；先按 rule 分组复核各自的 cutoff / exception 处理策略。"
+        planned_writes.append(line)
+
+    if conflict_rule_ids and exemption_rule_ids:
+        summary = f"当前这条 idea 涉及 {len(rule_ids)} 条 world-rule；其中 {len(conflict_rule_ids)} 条仍需处理，{len(exemption_rule_ids)} 条已有正式 exception 覆盖。"
+        action = "先按 rule 分组复核 constraints 层的冲突与豁免状态。"
+    elif conflict_rule_ids:
+        summary = f"当前这条 idea 同时触发了 {len(rule_ids)} 条 world-rule；先按 rule 分组复核各自的 cutoff / exception 处理策略。"
+        action = "先按 rule 分组复核 constraints 层的冲突与处理方向。"
+    else:
+        summary = f"这条 idea 命中的 {len(rule_ids)} 条 world-rule 已有正式 exception 覆盖；优先沿用既有解释链，并只复核需要人工确认的主体范围。"
+        action = "复核已落地的 world-rule exception。"
+
+    source_signals: list[str] = []
+    if conflict_rule_ids:
+        source_signals.append(f"consistency: world-rule conflict x{len(conflict_rule_ids)}")
+    if exemption_rule_ids:
+        source_signals.append(f"consistency: world-rule exemptions x{len(exemption_rule_ids)}")
     return {
         "domain": "constraints",
-        "action": "先按 rule 分组复核 constraints 层的冲突与处理方向。",
+        "action": action,
         "summary": summary,
         "target_files": sorted(all_targets),
         "reason": summary,
         "confidence": "high",
         "merge_input_id": None,
-        "readiness": "needs-review",
+        "readiness": overall_readiness,
         "planned_writes": planned_writes,
-        "source_signals": [f"consistency: world-rule conflict x{len(rule_ids)}"],
+        "source_signals": source_signals,
     }
 
 
@@ -586,7 +730,7 @@ def _domain_explainers(
             }
         )
 
-    constraints_group_explainer = _constraints_group_explainer(timeline_merge_inputs)
+    constraints_group_explainer = _constraints_group_explainer(timeline_merge_inputs, report, draft)
     if constraints_group_explainer is not None:
         explainers.append(constraints_group_explainer)
 

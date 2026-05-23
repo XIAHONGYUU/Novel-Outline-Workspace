@@ -1,6 +1,6 @@
 # Project Status
 
-最后更新：2026-05-22
+最后更新：2026-05-23
 
 ## 项目定位
 
@@ -100,11 +100,20 @@
 - 同一主体下如果标题 object 和正文 object 同时落成 claim，且前者只是同一家族的泛化说法，claim 层开始优先保留更具体那条
 - 多主体句子里如果前后主体分别对应不同 object，claim 提取开始按主体窗口截断，避免把后一个主体的 object 串回前一个主体
 - `identity` family 里的近义 object 开始按更具体 claim 收敛，例如“首领身份 / 组织首领是谁”会优先保留后者
+- `leak / same-camp / separate-camp` family 里的近义 object 也开始按更具体 claim 收敛，例如“有人泄密 / 议会有内鬼”“他们是一路人 / 议会和黑潮是同一阵营”“他们不是一路人 / 议会和黑潮不是同一阵营”会优先保留后者
+- 在 `same-camp / separate-camp` family 内，如果只是“同一阵营 / 一伙人 / 一路人”这类 wording 差异，claim 层也开始优先保留更标准表达
+- cross-family claim 当前会继续保持分离，避免把同一主体在同章知道的两类不同事实误收敛到一条
+- 如果同章已经有正式 event / scene / canon `knowledge-state` 记录，future duplicate 不再把当前 idea 误报成知情点前移
+- `world-rule` 在缺少 `knowledge_claims` 时，也开始按主体局部窗口抽取 knowledge signal；同章 exception 的同义 object 不再只靠整句字面命中，mixed-subject 句子里别人的 object 也不会误触发当前 rule
+- consistency report 开始显式输出 `world-rule-exemption-applied`，merge plan 在 clean gate 下也会补一条 exemption explainer，说明这是“已落地豁免”而不是“没有命中规则”
+- 对已落地的 world-rule exception，grouped summary 开始区分 `direct` 沿用和仍需 `review` 的主体范围；如果同一 idea 同时存在冲突 rule 和已豁免 rule，也会收敛进同一条 constraints 摘要
+- `exception_scope` 开始细分成 `exception_scope_base / exception_subject_scope / exception_match_mode`，并把 `review-subject-scope / review-exception-chain / review-exception-evidence` 这类 impact token 稳定写出
 - world-rule 相关的 canon explainer 开始引用各自命中的 claim，而不是回退到第一条 claim
 - 多条 rule 共享同一事件/场景写入时，重复的 timeline / outline explainers 开始做去重收敛
 - report 级结构化 `patch_suggestions`
 - 对后文“再次意识到 / 已经知道”类复述记录的豁免
 - relationship-history 对未来重复状态的图谱级豁免
+- 如果同章已经有正式 relationship beat，future same-state 记录不再把当前 idea 误报成关系漂移
 
 ### 7. timeline merge 输入层
 
@@ -137,13 +146,14 @@
 - `resolve-world-rule-by-updating-cutoff` 可把 rule cutoff 对齐到新事件
 - `document-world-rule-exception` 可只记录规则说明，并显式要求 override
 
-### 10. demo workspace 整理
+### 10. demo / case workspace 整理
 
 已支持：
 
 - 对 legacy duplicate idea 进行收敛
 - 为缺 intake draft 的历史 idea 补回最小 draft
 - 让 demo workspace 回到“有一条可继续 plan-merge 的 pending idea”状态
+- 新增 `first-workflow-case/` 作为首个独立 workflow 案例工作区，并停在 `clear gate + ready merge plan` 状态
 
 ### 11. intake backfill / repair
 
@@ -164,7 +174,7 @@
 - intake 对 legacy / 模糊 idea 的修复能力
 - 更稳定的 timeline / outline / canon 联动
 - 更明确的 skill 与 script 边界
-- 更完整的 demo / 文档闭环
+- 更完整的 demo / case workspace / 文档闭环
 
 ## 最近完成
 
@@ -207,6 +217,11 @@
 - 细化 constraints 影响面说明：grouped summary 已开始把每条 rule 的目标文件、direct/override 信息，以及 `timeline / outline / canon / constraints` 的 direct / review impact 类型直接摊开
 - 细化 canon 影响面说明：多条 world-rule exception 的 canon explainer 已开始按各自命中的 claim 输出 source signal
 - 收敛 explainers 噪音：同一事件/场景的重复 timeline / outline 说明开始优先保留一条更高可执行性的版本
+- 收紧同章锚点边界：如果当前 chapter 已经有正式的 knowledge-state / relationship 记录，future duplicate 不再反向把 idea 报成前移或漂移
+- 收紧无 claim 的 world-rule 边界：exception fallback 与规则命中都开始按主体局部窗口判断，不再把另一主体的 object 误算进来
+- 增加 exemption 可见性：同章 / 既有 world-rule exception 不再只在底层放行，report 与 plan 都开始显式标记
+- 收敛 world-rule 说明噪音：已豁免 rule 不再单独挂一条 summary，而是开始和冲突 rule 共享一条 grouped constraints 说明
+- 但 `exception_scope` 仍只覆盖第一层 token，后续还可以继续细化到更明确的 domain impact 组合
 
 ## 当前风险
 
@@ -214,8 +229,9 @@
 - consistency-check 已能输出 claim-level knowledge-state，但还不是完整知识图谱推理
 - timeline merge 已接上第一层 canon knowledge / exception 联动，但还不是完整知识图谱推理
 - relationship 目前已入 canon，但仍缺更丰富的状态图谱和更细的豁免边界
+- world-rule exception 已能处理 claim 级 subject/object 对齐，但 chapter-scoped exception 和 mixed-subject 展示边界还可继续收紧
 - world-rule 已有多策略输入，但“只改说明”的策略仍依赖人工 override
-- world-rule 现在已处理单 idea 下的多 claim / 多 rule 基本分流，并补上第一层 rule 级 direct / review impact 摘要、`shared-subject / split-subjects` 边界、标题/正文泛化 claim 收敛、mixed-subject claim 串绑收紧，以及 `identity` family 的更具体 claim 收敛；但更多 object family 仍偏薄
+- world-rule 现在已处理单 idea 下的多 claim / 多 rule 基本分流，并补上第一层 rule 级 direct / review impact 摘要、`shared-subject / split-subjects` 边界、标题/正文泛化 claim 收敛、mixed-subject claim 串绑收紧，以及 `identity / leak / same-camp / separate-camp` family 的更具体与更标准 wording 收敛；但更多 object family 仍偏薄
 - intake backfill 目前仍以启发式推断为主，手工增强字段在 force rebuild 下会被重建
 - canon 侧 explainers 仍有一部分 fallback case，尤其是更复杂的知识图谱与关系状态转移
 - skill 规划已写出，但执行优先级还需要持续收敛

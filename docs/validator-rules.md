@@ -98,14 +98,22 @@
 - consistency-check 当前还带有一批确定性豁免：
   对后文“再次 / 已经”类知情复述，以及有明确状态转移后的未来重复关系状态，会尽量不误报
 - 对同一 `knowledge-state` 同时命中更早与更晚记录的 case，会优先只保留更早冲突，避免重复告警
+- 如果同章已经有正式的 event / scene / canon `knowledge-state` 记录，future duplicate 不会再把当前 idea 误报成知情点前移
 - 对带地点括注或副标题的正式事件名 / 场景名，title-based drift 会尝试做保守的部分匹配
 - 对少量高频 `knowledge object`，consistency-check 会做保守同义归一，并尽量避免把共享前缀但实际不同的事实误判为同一 object
 - 对 `world-rule conflict` 与 `world_rule_exception`，consistency-check 现已开始优先复用结构化 `knowledge_claims` 做 subject / object 匹配
+- 如果一条 draft 没有成功抽出 `knowledge_claims`，`world-rule` 也会退回到主体局部窗口做 signal 匹配，而不是直接用整句字面串；这样 mixed-subject 句子里别人的 object 不会再误触发当前 rule
+- 如果某条 `world-rule` 已被正式 exception 放行，consistency report 现在会在 `exemptions[]` 中显式记一条 `world-rule-exemption-applied`，而不是只返回“无冲突”
+- merge plan 的 grouped constraints 说明也会继续把这类 rule 带出来，并区分哪些可直接沿用、哪些仍需人工 review
+- 对已豁免 rule，当前还会进一步写出 `exception_scope_base / exception_subject_scope / exception_match_mode`，并据此产出第一层 review impact token
 - 如果同一主体同时抽到标题里的泛化 object 和正文里的更具体 object，`knowledge_claims` 会优先收敛到更具体那条
 - 如果多主体句子里不同主体分别对应不同 object，`knowledge_claims` 会优先按主体窗口拆开，避免跨主体串绑
-- 如果同一主体在同一 object family 里同时抽到更短概括表达和更长具体表达，`knowledge_claims` 会优先保留更具体那条
+- 如果同一主体在同一 object family 里同时抽到更短概括表达和更长具体表达，`knowledge_claims` 会优先保留更具体那条；当前已覆盖 `identity / leak / same-camp / separate-camp`
+- 在 `same-camp / separate-camp` family 内，如果只是 wording 不同，`knowledge_claims` 会优先保留更标准表达
+- 不同 object family 的 claim 当前保持分离，避免把同章不同事实误收敛成一条
 - 当单条 idea 同时命中多条 `world-rule` 时，issue 细节会开始带回各自命中的 claim，供后续 merge plan 精确消费
 - merge plan 在多条 world-rule 场景下，现已开始先给 constraints 域分组摘要，再展开具体输入；摘要会带出每条 rule 的策略、targets、direct/override、按 direct / review 拆开的 impacts，以及 `shared-subject / split-subjects` exception scope
+- 如果同章已经有正式 relationship beat，future same-state 记录也不会再把当前 idea 误报成关系漂移
 
 ## 当前未实现
 
