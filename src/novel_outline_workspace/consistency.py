@@ -1265,6 +1265,35 @@ def _world_rule_context_subject_scope(
     return "split-subjects"
 
 
+def _local_signal_subject_scope(
+    haystack: str,
+    *,
+    rule_subject_terms: list[str],
+    all_subject_terms: list[str],
+) -> str:
+    normalized_subject_terms = {str(term).strip() for term in rule_subject_terms if str(term).strip()}
+    other_subject_terms = [
+        str(term).strip()
+        for term in all_subject_terms
+        if str(term).strip() and str(term).strip() not in normalized_subject_terms
+    ]
+    if not normalized_subject_terms or not other_subject_terms:
+        return "shared-subject"
+
+    for term in normalized_subject_terms:
+        start = 0
+        while True:
+            subject_index = haystack.find(term, start)
+            if subject_index < 0:
+                break
+            window_end = _subject_window_end(haystack, subject_index, len(term), list(normalized_subject_terms | set(other_subject_terms)))
+            window = haystack[subject_index:window_end]
+            if any(other_term in window for other_term in other_subject_terms):
+                return "mixed-subjects"
+            start = subject_index + len(term)
+    return "shared-subject"
+
+
 def _world_rule_exemption_scope_token(
     *,
     base_scope: str,
@@ -1406,12 +1435,19 @@ def _check_world_rule_conflicts(
                 if isinstance(exception_chapter, int) and exception_chapter == draft_chapter
                 else "prior-exception"
             )
-            exception_subject_scope = _world_rule_context_subject_scope(
-                draft,
-                knowledge_claims,
-                rule_subject=subject_key,
-            )
             exception_match_mode = "claim-match" if matching_claims else "local-signal"
+            if exception_match_mode == "claim-match":
+                exception_subject_scope = _world_rule_context_subject_scope(
+                    draft,
+                    knowledge_claims,
+                    rule_subject=subject_key,
+                )
+            else:
+                exception_subject_scope = _local_signal_subject_scope(
+                    haystack,
+                    rule_subject_terms=_rule_subject_terms(subject_key, rule_subject_id, canon_index),
+                    all_subject_terms=_rule_subject_candidates(canon_index),
+                )
             exemptions.append(
                 {
                     "level": "info",

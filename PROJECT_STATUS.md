@@ -108,6 +108,17 @@
 - consistency report 开始显式输出 `world-rule-exemption-applied`，merge plan 在 clean gate 下也会补一条 exemption explainer，说明这是“已落地豁免”而不是“没有命中规则”
 - 对已落地的 world-rule exception，grouped summary 开始区分 `direct` 沿用和仍需 `review` 的主体范围；如果同一 idea 同时存在冲突 rule 和已豁免 rule，也会收敛进同一条 constraints 摘要
 - `exception_scope` 开始细分成 `exception_scope_base / exception_subject_scope / exception_match_mode`，并把 `review-subject-scope / review-exception-chain / review-exception-evidence` 这类 impact token 稳定写出
+- 对 `prior-exception`，review impacts 开始细分到 `canon:review-exception-continuity`、`constraints:review-exception-chain`、`timeline:review-post-exception-beat`、`outline:review-post-exception-scene`
+- 对 `prior-exception`，grouped summary 现在还会继续细分 `write_shapes`，直接区分 `keep-existing-exception-record / carry-forward-exception-note / append-post-exception-beat / append-post-exception-scene-note` 这类更接近执行层的复核动作
+- 如果 `prior-exception` 下的默认 merge 输入实际命中既有 `event_id / scene_id`，对应 `write_shapes` 现在也会自动从 `append-post-exception-*` 收紧成 `rewrite-post-exception-*`
+- 如果 `prior-exception` 当前不需要继续动 timeline / outline，grouped summary 现在会继续收紧成 `annotate-existing-exception-record / annotate-existing-rule-note`，明确这轮只补 canon / constraints 注释
+- 对 `prior-exception + local-signal`，如果这轮没有可落地的 `event_id / scene_id`，grouped summary 现在会优先收敛到 `review-exception-evidence`，不再误带 `review-exception-chain`
+- 对 `prior-exception + local-signal`，如果别的主体只出现在主体窗口外，grouped summary 现在仍保持 `review-exception-evidence`；只有主体窗口内已经混进别的主体时，才会额外升级到 `review-subject-scope`
+- `same-chapter exemption` 的 review case 现在也开始补 `timeline:review-same-chapter-beat` / `outline:review-same-chapter-scene`，并和 `evidence-only / review-subject-scope` 规则保持一致
+- 多条 exemption rule 共享同一批 review token 时，grouped summary 现在会先提一条 `shared-exemption-review`，把公共 `review_impacts / review_write_shapes / targets` 上提，减少逐条重复
+- 如果同一组 exemption 同时混有 `direct` 和 `review`，grouped summary 现在还会再提一条 `shared-exemption-base`，把公共 `impacts / targets / domains` 再上提一层
+- 对 `prior-exception + claim-match` 的叙事型 idea，如果这轮还没落到具体 event / scene，但已经是明确剧情 beat，grouped summary 现在仍会保留 `carry-forward-exception-note`
+- 如果这类 `claim-match` 叙事型 case 同时落在 `split-subjects / mixed-subjects`，grouped summary 现在会退回 `annotate-existing-rule-note + review-subject-scope`，不再默认共用 exception chain
 - world-rule 相关的 canon explainer 开始引用各自命中的 claim，而不是回退到第一条 claim
 - 多条 rule 共享同一事件/场景写入时，重复的 timeline / outline explainers 开始做去重收敛
 - report 级结构化 `patch_suggestions`
@@ -217,11 +228,20 @@
 - 细化 constraints 影响面说明：grouped summary 已开始把每条 rule 的目标文件、direct/override 信息，以及 `timeline / outline / canon / constraints` 的 direct / review impact 类型直接摊开
 - 细化 canon 影响面说明：多条 world-rule exception 的 canon explainer 已开始按各自命中的 claim 输出 source signal
 - 收敛 explainers 噪音：同一事件/场景的重复 timeline / outline 说明开始优先保留一条更高可执行性的版本
+- 细化 `prior-exception` 写入组合：grouped summary 已开始把“沿用旧 exception 但还需复核什么”继续拆成更接近执行的 `write_shapes`
+- 收紧 `prior-exception` 写入形态：如果默认 merge 输入实际命中既有 event / scene，grouped summary 已开始把 `append` 自动改判成 `rewrite`
+- 收紧 `prior-exception` 注释边界：如果当前 case 不需要 timeline / outline 写入，grouped summary 已开始把 review 收敛到纯 `annotate` 组合
+- 收紧 `local-signal` 证据边界：如果这轮没有可落地的 event / scene 标识，grouped summary 已开始只提示 evidence note，而不再误判成 chain 更新
+- 细化 `local-signal` 多主体边界：如果别的主体只出现在窗口外，grouped summary 继续只做 evidence review；只有窗口内混主体时才升级 subject-scope review
+- 收敛 `same-chapter` 说明层：同章 exemption 的 grouped summary 已开始和 `prior-exception` 共用同一套 evidence / subject-scope / timeline-outline review 规则
+- 收敛 grouped summary 噪音：多条 exemption 的公共 review token 已开始集中上提，不再在每条 rule 行里重复展开
+- 细化 `claim-match` 注释边界：叙事型 idea 在无 event / scene targets 时，grouped summary 已开始保留 `carry-forward`，而纯设定型则继续只走 `annotate`
+- 收紧多主体 `claim-match` 边界：叙事型 idea 在 `split-subjects / mixed-subjects` 下，grouped summary 已开始从 `carry-forward` 退回 `annotate + review-subject-scope`
 - 收紧同章锚点边界：如果当前 chapter 已经有正式的 knowledge-state / relationship 记录，future duplicate 不再反向把 idea 报成前移或漂移
 - 收紧无 claim 的 world-rule 边界：exception fallback 与规则命中都开始按主体局部窗口判断，不再把另一主体的 object 误算进来
 - 增加 exemption 可见性：同章 / 既有 world-rule exception 不再只在底层放行，report 与 plan 都开始显式标记
 - 收敛 world-rule 说明噪音：已豁免 rule 不再单独挂一条 summary，而是开始和冲突 rule 共享一条 grouped constraints 说明
-- 但 `exception_scope` 仍只覆盖第一层 token，后续还可以继续细化到更明确的 domain impact 组合
+- 但 `prior-exception` 的 domain impact 仍是第一层保守拆分，后续还可以继续细化到更明确的写入组合
 
 ## 当前风险
 

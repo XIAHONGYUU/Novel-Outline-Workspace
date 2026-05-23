@@ -504,6 +504,81 @@
 
 ---
 
+## 2026-05-23
+
+### 决策：`direct / review` 混合 exemption 先再提一条 `shared-exemption-base`
+
+当前状态：
+
+- 多条 review exemption 已经会把公共 review token 上提到 `shared-exemption-review`
+- 但如果同一组 exemption 里同时混有 `direct` 和 `review`，公共的 `impacts / targets / domains` 仍会在各自 rule 行里重复展开
+
+因此这轮再补一层更基础的共享行：
+
+- 对所有 exemption 共用的基础 token，先提一条 `shared-exemption-base`
+- 这层只承载公共 `impacts / targets / domains`，不碰 review 专属 token
+- `shared-exemption-review` 仍只负责多条 review exemption 的共享 review token
+
+原因：
+
+- 先把混合 `direct / review` 场景里的公共噪音压下去
+- 避免 `shared-exemption-base` 和 `shared-exemption-review` 写同一批 review token
+- 后续如果继续压 conflict rule 与 exemption line 共存时的重复，也可以直接复用这套分层
+
+---
+
+## 2026-05-23
+
+### 决策：多条 exemption 共用同一批 review token 时，先上提 `shared-exemption-review`
+
+当前状态：
+
+- `same-chapter` 和 `prior-exception` 的 review 说明层已经基本对齐
+- 但当一条 idea 同时命中多条已豁免 rule，而且这些 rule 共享同一批 `review_impacts / review_write_shapes / targets` 时，grouped summary 仍会在每条 rule 行里重复展开
+
+因此这轮先做一层 summary 压缩：
+
+- 对共享的 review token，先提一条 `shared-exemption-review`
+- 每条 rule 继续保留自己的 `reuse-existing-exception` 行
+- 但公共 `review_impacts / review_write_shapes / targets` 从逐条行里扣掉，只在共享行里写一次
+
+原因：
+
+- 先减少多条 exemption review 的重复噪音
+- 不改变 apply / review 语义，只收紧说明层呈现
+- 后续如果继续做 `direct / review` 混合压缩，也可以复用同一套“共享值上提”规则
+
+---
+
+## 2026-05-23
+
+### 决策：`prior-exception` 先拆成跨 `canon / constraints / timeline / outline` 的 review impacts
+
+当前状态：
+
+- `prior-exception` 已经能被识别
+- 但如果 review impacts 只写成抽象 token，人工仍不知道应优先复核哪一层
+
+因此本轮先做一层保守拆分：
+
+- `canon:review-exception-continuity`
+- `constraints:review-exception-chain`
+- `timeline:review-post-exception-beat`
+- `outline:review-post-exception-scene`
+
+原因：
+
+- 这样“沿用旧 exception 但还要复核什么”会直接落到 domain 级别
+- 后面即使继续细化到更具体的写入动作，也可以复用这层 domain token
+- 这比继续堆自由文本 summary 更稳定
+
+影响：
+
+- grouped summary 里不再只写抽象 review，而会直接带出 `review-exception-continuity / review-exception-chain / review-post-exception-beat / review-post-exception-scene`
+- 后续如果继续细化到“追加 beat / 改写既有 beat / 只补注释”，可以直接在这些 token 之上继续分层
+
+---
+
 ## 2026-05-22
 
 ### 决策：`world-rule` 的 merge plan 开始按命中的 claim 精确绑定多条 rule
@@ -640,6 +715,204 @@
 - 这两类误报在实际大纲里很常见
 - 它们可以用确定性规则压掉，不需要先上完整图谱推理
 - 先减少噪音，后续 merge plan 的结构化输入才更稳定
+
+---
+
+## 2026-05-23
+
+### 决策：`prior-exception` 先继续拆成稳定的 `write_shapes`
+
+当前状态：
+
+- `prior-exception` 已经能稳定识别
+- grouped summary 已经能写出 `canon / constraints / timeline / outline` 四层 review impacts
+- 但这些 token 仍偏“影响面”，还不够接近实际写入动作
+
+因此这轮先不改 apply 逻辑，而是在 summary 层继续细分一层稳定 token：
+
+- direct reuse 先写成 `reuse-existing-exception-record / reuse-existing-exception-note`
+- prior review 先写成 `keep-existing-exception-record / carry-forward-exception-note`
+- 如果当前 draft 仍需要 timeline / outline 落地，再补 `append-post-exception-beat / append-post-exception-scene-note`
+- 如果后续命中已有 event / scene 更新，再允许扩到 `rewrite-post-exception-*`
+
+原因：
+
+- 先把“要复核什么”从 domain 提示推进到更接近执行的动作组合
+- 这样 grouped summary 不用立刻引入更多结构，也能更稳定地指导人工决策
+- 保持 token 级表达，后续如果继续做 apply / review 分流，还能直接复用这层信号
+
+---
+
+## 2026-05-23
+
+### 决策：`create-event-and-scene` 命中既有记录时，`write_shapes` 先按 `rewrite` 解释
+
+当前状态：
+
+- `prior-exception` 的 grouped summary 已经能写出 `append-post-exception-*`
+- 但默认 merge 输入的 strategy 还是统一写成 `create-event-and-scene`
+- 这会把“其实只是重写已有 event / scene”的 case 误说成 append
+
+因此这轮先只在 summary 判定层补一层保守识别：
+
+- 如果默认输入里的 `event_id` 已存在，timeline 侧改写为 `rewrite-post-exception-beat`
+- 如果默认输入里的 `scene_id` 已存在，outline 侧改写为 `rewrite-post-exception-scene-note`
+- apply 层暂不改 strategy，先保持兼容
+
+原因：
+
+- 先让 explainer 对齐真实写入形态，减少 review 噪音
+- 不必为了说明层收紧，马上改动 merge apply 入口
+- 这层判定后续还能继续扩到 `annotate / carry-forward`
+
+---
+
+## 2026-05-23
+
+### 决策：没有 timeline / outline 写入时，`prior-exception` 的 review 先收敛到纯 `annotate`
+
+当前状态：
+
+- `prior-exception` 已能分出 `append` 和 `rewrite`
+- 但还有一类 case，实际上不需要继续动 event / scene
+- 这类 case 如果继续写成 `carry-forward`，会误导成还有后续时间线改动
+
+因此这轮先把这类 review 说明收紧成：
+
+- `canon:keep-existing-exception-record`
+- `canon:annotate-existing-exception-record`
+- `constraints:annotate-existing-rule-note`
+
+同时不再补：
+
+- `timeline:review-post-exception-beat`
+- `outline:review-post-exception-scene`
+- `timeline/events.json`
+- `outline/scene-index.json`
+
+原因：
+
+- 先把“只是补注释”与“还要带后续 beat / scene”拆开
+- 这样 grouped summary 更接近真实执行成本
+- 后续再继续决定 `annotate` 和 `carry-forward` 的更细切换条件
+
+---
+
+## 2026-05-23
+
+### 决策：`prior-exception + local-signal` 且无可落地 event/scene 时，先只提示 evidence
+
+当前状态：
+
+- `local-signal` 已经能命中正式 exception
+- 但如果没有可落地的 `event_id / scene_id`，这轮其实很难稳定判断后续 chain 要不要变
+- 继续默认写成 `carry-forward`，会把“证据复核”误说成“链路重写”
+
+因此这轮先收紧成更保守的说明：
+
+- 保留 `canon:review-exception-evidence`
+- 保留 `annotate-existing-exception-record / annotate-existing-rule-note`
+- 不再默认补 `constraints:review-exception-chain`
+- `create-event-and-scene` 也只有在带着可落地 `event_id / scene_id` 时，才会落成 `append-post-exception-*`
+
+原因：
+
+- 先把“只有证据需要复核”和“确实要改 chain”拆开
+- 这样 local-signal case 的 grouped summary 噪音更低
+- 后续可以继续把 claim-match 路径的切换条件做细，而不用回头再拆这层混淆
+
+---
+
+## 2026-05-23
+
+### 决策：`claim-match` 的叙事型 idea 即使没有 event/scene target，也先保留 `carry-forward`
+
+当前状态：
+
+- 纯设定型 `claim-match` 已经能收敛成 `annotate`
+- 但 `reveal / twist / backstory` 这类叙事型 idea，即使这轮没落成具体 event / scene，也往往仍然代表一段需要延续的 exception chain
+
+因此这轮先按 kind 做一层保守分流：
+
+- `world` 这类设定型 case 继续走 `annotate-existing-rule-note`
+- `reveal / twist / backstory / event / scene / death` 这类叙事型 case，在 `prior-exception + claim-match` 下仍保留 `carry-forward-exception-note`
+- 但如果没有 timeline / outline write-shape，仍不补 `timeline:review-*` / `outline:review-*`
+
+原因：
+
+- 先把“只是补说明”和“剧情链仍要续接”拆开
+- 不要求现在就精确落到 event / scene，先把 constraints 层的说明语义拉直
+- 下一步再继续收紧 mixed-subject / split-subjects 上的切换条件
+
+---
+
+## 2026-05-23
+
+### 决策：`claim-match` 的叙事型 idea 只有在 `shared-subject` 下才默认 `carry-forward`
+
+当前状态：
+
+- 叙事型 `claim-match` 已经能在无 event / scene target 时保留 `carry-forward`
+- 但一旦落到 `split-subjects / mixed-subjects`，这条 exception chain 就不再明显属于同一主体链
+
+因此这轮再收紧一步：
+
+- `shared-subject + claim-match + narrative kind` 仍可保留 `carry-forward-exception-note`
+- `split-subjects / mixed-subjects + claim-match` 即使是 narrative kind，也先退回 `annotate-existing-rule-note`
+- 同时继续补 `constraints:review-subject-scope`
+
+原因：
+
+- 先把“剧情链仍要续接”和“主体范围已经拆开”分成两层判断
+- 避免多主体 case 误看成可以沿用同一条 exception chain
+- 后续只需要继续收紧 `mixed-subjects + local-signal`，不必回头重拆 shared-subject 路径
+
+---
+
+## 2026-05-23
+
+### 决策：`local-signal` 的多主体边界按“窗口内是否混主体”来判
+
+当前状态：
+
+- `local-signal` 已经能和 `claim-match` 分开
+- 但多主体时，并不是所有 case 都该直接升级到 `review-subject-scope`
+- 如果别的主体只出现在目标主体窗口之外，这轮其实仍然更接近“证据不足”，而不是“主体链混乱”
+
+因此这轮把 `local-signal` 再拆一层：
+
+- 若别的主体没有进入 rule subject 的局部窗口，继续保留 `shared-subject-local-signal`
+- 若局部窗口内已经混进别的主体，升级成 `mixed-subjects-local-signal`
+- merge summary 只在后者额外补 `constraints:review-subject-scope`
+
+原因：
+
+- 先把“证据不够”与“主体范围不清”拆开
+- 这样 local-signal 场景不会因为文本里出现第二个人名就过度升级
+- 后续同一套窗口判断还能继续复用到 same-chapter exemption 的说明收敛
+
+---
+
+## 2026-05-23
+
+### 决策：把 `same-chapter exemption` 的 review 说明层对齐到 `prior-exception`
+
+当前状态：
+
+- `prior-exception` 已经能稳定分出 `evidence-only / review-subject-scope / timeline-outline review`
+- `same-chapter exemption` 之前虽然能 direct/review，但 review 侧的说明粒度还不够一致
+
+因此这轮把 review 侧说明统一到同一套分层：
+
+- 若涉及 timeline / outline 写入，补 `timeline:review-same-chapter-beat / outline:review-same-chapter-scene`
+- 若是 `local-signal` 且窗口外才出现别的主体，只保留 `review-exception-evidence`
+- 若窗口内已混主体，再额外补 `review-subject-scope`
+
+原因：
+
+- 先把 `same-chapter` 和 `prior-exception` 的 explainers 拉到同一语义层
+- 这样下一步只需要继续做 grouped summary 去重，不必再维护两套不同的 review 规则
+- 同时能减少“同一类 review，在不同 scope 下说法不一致”的噪音
 
 ---
 

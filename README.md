@@ -75,6 +75,18 @@
   对已落地的 exception，constraints explainer 现在也开始区分哪些可 `direct` 沿用、哪些仍需 `review`，
   并把“仍有冲突的 rule”和“已有豁免的 rule”收敛进同一组 grouped summary，
   `exception_scope` 本身也开始细分成 `chapter scope / subject scope / match mode` 三层稳定 token，
+  对 `prior-exception`，review impacts 也开始拆到 `canon / constraints / timeline / outline` 四层，
+  并直接标成 `review-exception-continuity / review-exception-chain / review-post-exception-beat / review-post-exception-scene` 这类更接近写入面的 token，
+  同时 grouped summary 也开始继续往“写入组合”收敛，能区分 `reuse-existing-exception-record / keep-existing-exception-record / carry-forward-exception-note / append-post-exception-beat / append-post-exception-scene-note` 这类更接近执行层的 token，
+  如果默认 merge 输入实际命中既有 `event_id / scene_id`，对应 `write_shapes` 也会从 `append-post-exception-*` 自动收紧成 `rewrite-post-exception-*`，
+  如果当前 case 不需要继续动 timeline / outline，grouped summary 也会继续收紧成只补 `annotate-existing-exception-record / annotate-existing-rule-note`，
+  对 `prior-exception + local-signal`，如果这轮连可落地的 `event_id / scene_id` 都没有，grouped summary 也会优先只保留 `review-exception-evidence`，不再误报成需要改 `exception chain`，
+  而对 `prior-exception + claim-match` 的叙事型 idea，如果这轮虽然还没落到具体 event / scene，但已经是明确的剧情 beat，grouped summary 仍会保留 `carry-forward-exception-note`，
+  但如果同一个 `claim-match` 叙事型 case 同时落在 `split-subjects / mixed-subjects`，grouped summary 会退回 `annotate-existing-rule-note + review-subject-scope`，不再默认共用同一条 exception chain，
+  对 `local-signal` 也开始区分“别的主体只出现在窗外”与“主体窗口内已经混进别的主体”：前者继续只做 `review-exception-evidence`，后者会额外升级到 `review-subject-scope`，
+  同样的说明层也开始回流到 `same-chapter exemption`：如果 `same-chapter` 的 review case 仍涉及 timeline / outline 落地，grouped summary 会直接写出 `review-same-chapter-beat / review-same-chapter-scene`，
+  当多条 exemption rule 共享同一批 review token 时，grouped summary 现在还会先提一条 `shared-exemption-review`，把公共 `review_impacts / review_write_shapes / targets` 上提，减少逐条重复，
+  如果同一组 exemption 同时混有 `direct` 和 `review`，grouped summary 现在还会再提一条 `shared-exemption-base`，把公共 `impacts / targets / domains` 再上提一层，
   canon 侧 exception explainer 也会对齐到各自命中的 claim，
   重复的 timeline / outline 说明会优先收敛成一条更高可执行性的版本
 - graph-aware consistency exemptions
@@ -97,7 +109,7 @@
 - 更细的 timeline-order / knowledge-state 规则
 - 更细的 relationship / world-rule exception 边界
 - 继续扩到更多 object family 的 claim 收敛
-- grouped summary 与逐条 explainer 的进一步压缩
+- grouped summary 与逐条 explainer 的进一步压缩，以及更细的 write-shape token
 - repair / merge explainers 的进一步收敛
 
 ## 核心结构
