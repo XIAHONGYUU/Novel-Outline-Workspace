@@ -322,6 +322,34 @@
 
 ## 2026-05-22
 
+### 决策：首个独立 workflow 案例工作区先保留在 `plan-merge` 前状态
+
+当前状态：
+
+- 仓库里已经有一个持续演化中的 `demo-workspace/`
+- 但还缺一个“从零初始化后，最短路径跑到 ready merge”的独立案例
+
+因此本轮新增一个单独工作区：
+
+- `first-workflow-case/`
+
+并刻意把它停在：
+
+- 想法已录入
+- consistency gate 已通过
+- merge plan 已生成
+- 尚未 apply
+
+原因：
+
+- 这样最适合作为“第一次用这条 workflow 应该看到什么”的样本
+- 它既能展示 intake / consistency / plan 的完整产物
+- 又不会把后续 apply 结果混进第一次案例，便于继续复盘
+
+---
+
+## 2026-05-22
+
 ### 决策：多条 `world-rule` 冲突时，`proposed_actions` 先给 constraints 分组摘要
 
 当前状态：
@@ -338,7 +366,9 @@
 - grouped summary 里还要带出按主体链划分的 exception scope，至少区分 `shared-subject` 和 `split-subjects`
 - 如果同一主体在标题和正文里同时触发泛化 object 与更具体 object，claim 层优先保留更具体的匹配，减少 world-rule 下游重复绑定
 - 如果多主体句子里前后主体分别对应不同 object，claim 层要按主体窗口拆开，避免后一个主体的 object 被前一个主体误吸收
-- 如果同一主体在同一 object family 里出现更短的概括表达和更长的具体表达，claim 层优先保留更具体的那条
+- 如果同一主体在同一 object family 里出现更短的概括表达和更长的具体表达，claim 层优先保留更具体的那条；当前已覆盖 `identity / leak / same-camp / separate-camp`
+- 在 `same-camp / separate-camp` family 内，如果只是标准表达和口语表达差异，claim 层优先保留更标准的 wording
+- 不同 object family 的 claim 当前保持分离，避免把同章出现的不同事实错误收敛
 - grouped summary 里直接列出每条 rule 的策略、目标文件和 direct/override 信息
 
 原因：
@@ -346,6 +376,131 @@
 - 先按 rule 聚合，人工更容易判断本次是“一条规则多策略”，还是“多条规则并行冲突”
 - 这能减少在 merge plan 里来回对照多条 input 的成本
 - 先把摘要层补上，后续再继续细化更完整的 impact explainer
+
+---
+
+## 2026-05-23
+
+### 决策：`knowledge-state / relationship-history` 先把“同章已落地”视为稳定锚点
+
+当前状态：
+
+- `knowledge-state` 已能处理“更早记录优先”和 future recap 豁免
+- `relationship-history` 已能处理未来重复状态与中间状态转移豁免
+- 但如果同章已经存在正式的 event / scene / canon beat，后面更晚的重复记录仍可能把当前 idea 误报成前移或漂移
+
+因此本轮先补一个更保守的 chapter-scoped 边界：
+
+- 如果同章已经有正式的 `knowledge-state` 记录，无论来源是 event / scene / canon，优先视为当前 idea 已落地
+- 如果同章已经有正式的 relationship beat，优先视为当前关系状态已经落地
+- 在这两种情况下，future duplicate 不再反向把当前 idea 报成前移或关系漂移
+
+原因：
+
+- 这更符合 `plan-merge -> apply-merge -> recheck` 的闭环预期
+- apply 之后重新跑 consistency，不应再被更晚的重复记录继续阻塞
+- 先把 chapter-scoped 锚点收紧，后面再继续补 world-rule exception 的同章 / mixed-subject 边界会更稳
+
+---
+
+## 2026-05-23
+
+### 决策：无 `knowledge_claims` 时，`world-rule` 先按主体局部窗口判断命中与 exception
+
+当前状态：
+
+- `world-rule conflict` 和 `world_rule_exception` 在有 `knowledge_claims` 时已经能做 subject/object 对齐
+- 但如果 draft 没抽出 claim，之前会退回“整句里是否同时出现 subject / object”的粗匹配
+- 这会让 mixed-subject 句子里另一主体的 object 被误算到当前 rule subject 身上，也会让同章 exception 的同义 object 只靠字面串命中
+
+因此本轮先补一层 subject-local fallback：
+
+- 没有 `knowledge_claims` 时，沿用主体窗口切分逻辑
+- 只在当前 rule subject 附近抽取 knowledge signal
+- `world-rule conflict` 与 `world_rule_exception` fallback 都改走这套局部信号，而不再直接扫整句
+
+原因：
+
+- 这样能把 mixed-subject 误报压掉
+- 也能让同章 exception 在“身份 / 是谁”这类同义 object 上继续稳定生效
+- 先把无 claim fallback 收紧，再继续做 chapter-scoped exception 的 explainer 展示会更稳
+
+---
+
+## 2026-05-23
+
+### 决策：`world-rule` 的已落地 exception 不再只静默放行，report / plan 需要显式标记
+
+当前状态：
+
+- 同章或既有 `world_rule_exception` 已经可以在 consistency-check 中直接放行
+- 但如果只是在底层返回“无冲突”，人工很难分辨这是“没命中规则”还是“命中了但已有正式豁免”
+
+因此本轮补一层显式可见性：
+
+- consistency report 新增 `exemptions`
+- 对已命中的正式规则豁免，写出 `world-rule-exemption-applied`
+- merge plan 在 clean gate 下也补一条 constraints explainer，直接标记对应 rule 的 `subject_scope / exception_scope`
+
+原因：
+
+- 这样 chapter-scoped exception 不再是隐式状态
+- mixed-subject / split-subjects 边界可以在 clean gate 下继续被看见和复核
+- 后续再细化 direct / review exemption summary 时，不需要重新设计 report 结构
+
+---
+
+## 2026-05-23
+
+### 决策：已豁免 `world-rule` 与仍冲突 `world-rule` 尽量共享一条 grouped constraints 说明
+
+当前状态：
+
+- plan 已经能单独解释“多条冲突 rule”
+- 也已经能单独解释“已有正式 exception 的 rule”
+- 但两者分成两条 summary 时，噪音偏大，而且人工仍要自己拼出“哪些 rule 需要处理、哪些其实可以直接沿用”
+
+因此本轮把 grouped summary 再收一层：
+
+- 冲突 rule 继续保留原有策略 / impacts / targets 摘要
+- 已豁免 rule 改成 `reuse-existing-exception`
+- 对已豁免 rule 直接区分 `direct` 沿用和 `review` 复核
+- 如果同一 idea 同时存在冲突 rule 和已豁免 rule，优先合并成同一条 constraints summary
+
+原因：
+
+- 这样人工在一个摘要里就能看完“哪些还要处理，哪些只需沿用”
+- `shared-subject / split-subjects / mixed-subjects` 会直接影响 direct/review 判定，更适合放在同一条 grouped 说明里
+- 后面继续细化 `exception_scope` 和 impact 类型时，也不需要再拆第二套 summary
+
+---
+
+## 2026-05-23
+
+### 决策：`exception_scope` 先固定成三层 token，再往 impact 组合扩
+
+当前状态：
+
+- `same-chapter / prior-exception` 这种单层 scope 已经不够解释为什么某条 exception 只能 review
+- 真正影响 direct / review 的至少还有主体范围和匹配来源
+
+因此本轮先把 `exception_scope` 稳定成三层：
+
+- `exception_scope_base`
+- `exception_subject_scope`
+- `exception_match_mode`
+
+并据此派生第一层 review impact token：
+
+- `constraints:review-subject-scope`
+- `constraints:review-exception-chain`
+- `canon:review-exception-evidence`
+
+原因：
+
+- 先把 token 层固定，后面细化 domain impact 组合不会再反复改字段名
+- direct / review 判定也会更可解释，不再只靠 summary 文案
+- 这能继续压缩后续 explainer 的自由文本噪音
 
 ---
 

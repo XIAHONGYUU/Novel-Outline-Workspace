@@ -6,6 +6,8 @@
 .
 ├── README.md
 ├── WORKFLOW.md
+├── demo-workspace/
+├── first-workflow-case/
 ├── docs/
 ├── novel-outline-orchestrator-skill/
 ├── scripts/
@@ -35,6 +37,21 @@
 - `plan_idea_merge.py`
 - `apply_idea_merge.py`
 - `run_outline_workspace_pipeline.py`
+
+### `demo-workspace/`
+
+持续演化中的综合示例工作区：
+
+- 用于承载长期累积的 demo 数据
+- 方便验证 legacy repair、merge plan、validator 等回归路径
+
+### `first-workflow-case/`
+
+首个独立 workflow 案例工作区：
+
+- 从零初始化
+- 至少包含 1 条真实 pending idea
+- 当前停在 `check-consistency` 已过、`plan-merge` 已生成、尚未 `apply` 的状态
 
 ### `src/novel_outline_workspace/`
 

@@ -1,0 +1,194 @@
+{
+  "idea_id": "idea-20260522-001",
+  "title": "林舟在白塔档案室发现泄密账册",
+  "kind": "reveal",
+  "status": "pending",
+  "content": "林舟在第三章的白塔档案室发现密账，由此知道议会内部有人泄密。",
+  "suggested_domains": [
+    "canon",
+    "outline",
+    "timeline"
+  ],
+  "consistency_gate": {
+    "status": "clear",
+    "can_plan_merge": true,
+    "can_apply_merge": true,
+    "summary": "consistency gate 已通过，可以进入 merge planning / apply。",
+    "report_path": null,
+    "view_path": null,
+    "blockers": [],
+    "warnings": []
+  },
+  "intake_summary": {
+    "chapter_hints": [
+      3
+    ],
+    "location_candidates": [
+      "的白塔",
+      "白塔"
+    ],
+    "character_mentions": [
+      "林舟",
+      "议会"
+    ],
+    "suggested_domains": [
+      "outline",
+      "timeline"
+    ],
+    "confidence": "medium-high"
+  },
+  "timeline_merge_inputs": [
+    {
+      "id": "timeline-merge-001",
+      "kind": "timeline-merge-input",
+      "strategy": "create-event-and-scene",
+      "summary": "建议把 `林舟在白塔档案室发现泄密账册` 作为第 3 章的事件/场景并入。",
+      "target_files": [
+        "timeline/events.json",
+        "outline/scene-index.json",
+        "outline/master-outline.md"
+      ],
+      "source_issue_code": null,
+      "source_patch_suggestion_ids": [],
+      "missing_fields": [],
+      "can_apply_directly": true,
+      "requires_override": false,
+      "warnings": [],
+      "resolution_note_suggestion": "把 `林舟在白塔档案室发现泄密账册` 并入 timeline / outline，并同步视图。",
+      "apply_args": {
+        "event_id": "event-林舟在白塔档案室发现泄密账册",
+        "event_label": "林舟在白塔档案室发现泄密账册",
+        "chronological_index": 3,
+        "reading_chapter": 3,
+        "location": "的白塔",
+        "participant_ids": [
+          "char-protagonist"
+        ],
+        "event_notes": "林舟在第三章的白塔档案室发现密账，由此知道议会内部有人泄密。",
+        "chapter_number": 3,
+        "scene_id": "scene-林舟在白塔档案室发现泄密账册",
+        "scene_title": "林舟在白塔档案室发现泄密账册",
+        "scene_pov": "林舟",
+        "scene_status": "planned",
+        "scene_character_ids": [
+          "char-protagonist"
+        ],
+        "scene_event_ids": [
+          "event-林舟在白塔档案室发现泄密账册"
+        ],
+        "scene_notes": "林舟在第三章的白塔档案室发现密账，由此知道议会内部有人泄密。"
+      }
+    },
+    {
+      "id": "timeline-merge-know-001",
+      "kind": "timeline-merge-input",
+      "strategy": "upsert-canon-knowledge-state",
+      "summary": "把 `林舟` 关于 `泄密账册` 的知情变化补进 canon 机器真相源。",
+      "target_files": [
+        "state/canon-index.json",
+        "canon/characters.md"
+      ],
+      "source_issue_code": null,
+      "source_patch_suggestion_ids": [],
+      "missing_fields": [],
+      "can_apply_directly": true,
+      "requires_override": false,
+      "warnings": [],
+      "resolution_note_suggestion": "把 `林舟` 的知情变化写入 canon。",
+      "apply_args": {
+        "knowledge_state_id": "know-char-protagonist-泄密账册-ch3",
+        "knowledge_subject_id": "char-protagonist",
+        "knowledge_subject_name": "林舟",
+        "knowledge_object_key": "泄密账册",
+        "knowledge_object_phrase": "泄密账册",
+        "knowledge_verb": "发现",
+        "knowledge_reading_chapter": 3,
+        "knowledge_event_id": null,
+        "knowledge_notes": "林舟在第三章的白塔档案室发现密账，由此知道议会内部有人泄密。"
+      }
+    }
+  ],
+  "proposed_actions": [
+    {
+      "domain": "outline",
+      "action": "处理 outline 层的具体写入。",
+      "summary": "在 `outline/scene-index.json` 新增或更新第 3 章场景 `林舟在白塔档案室发现泄密账册`。",
+      "target_files": [
+        "timeline/events.json",
+        "outline/scene-index.json",
+        "outline/master-outline.md"
+      ],
+      "reason": "在 `outline/scene-index.json` 新增或更新第 3 章场景 `林舟在白塔档案室发现泄密账册`。",
+      "confidence": "high",
+      "merge_input_id": "timeline-merge-001",
+      "readiness": "ready",
+      "planned_writes": [
+        "scene: 林舟在白塔档案室发现泄密账册",
+        "chapter: 3",
+        "pov: 林舟",
+        "event_ids: event-林舟在白塔档案室发现泄密账册"
+      ],
+      "source_signals": [
+        "intake: chapter hint 3",
+        "intake: characters 林舟, 议会"
+      ],
+      "missing_fields": []
+    },
+    {
+      "domain": "timeline",
+      "action": "处理 timeline 层的具体写入。",
+      "summary": "在 `timeline/events.json` 新增或更新事件 `林舟在白塔档案室发现泄密账册`，并挂到第 3 章。",
+      "target_files": [
+        "timeline/events.json",
+        "outline/scene-index.json",
+        "outline/master-outline.md"
+      ],
+      "reason": "在 `timeline/events.json` 新增或更新事件 `林舟在白塔档案室发现泄密账册`，并挂到第 3 章。",
+      "confidence": "high",
+      "merge_input_id": "timeline-merge-001",
+      "readiness": "ready",
+      "planned_writes": [
+        "event: 林舟在白塔档案室发现泄密账册",
+        "reading_chapter: 3",
+        "location: 的白塔",
+        "participants: char-protagonist"
+      ],
+      "source_signals": [
+        "intake: chapter hint 3",
+        "intake: location 的白塔",
+        "intake: characters 林舟, 议会"
+      ],
+      "missing_fields": []
+    },
+    {
+      "domain": "canon",
+      "action": "处理 canon 层的具体写入。",
+      "summary": "把 `林舟` 的知情变化写入 `state/canon-index.json`，作为正式 knowledge-state 事实源。",
+      "target_files": [
+        "state/canon-index.json",
+        "canon/characters.md"
+      ],
+      "reason": "把 `林舟` 的知情变化写入 `state/canon-index.json`，作为正式 knowledge-state 事实源。",
+      "confidence": "high",
+      "merge_input_id": "timeline-merge-know-001",
+      "readiness": "ready",
+      "planned_writes": [
+        "knowledge_state_id: know-char-protagonist-泄密账册-ch3",
+        "subject: 林舟",
+        "object: 泄密账册",
+        "reading_chapter: 3"
+      ],
+      "source_signals": [
+        "intake: characters 林舟, 议会",
+        "claim: 林舟 第3章 知道泄密账册"
+      ],
+      "missing_fields": []
+    }
+  ],
+  "unresolved_questions": [
+    "是否需要新增或更新某个正式角色 / 设定条目？",
+    "这条想法具体落在哪一章或哪一个 scene？",
+    "这条想法对应的真实时间序号、阅读章节和参与者是什么？"
+  ],
+  "created_at": "2026-05-22T15:38:49Z"
+}

@@ -1,0 +1,38 @@
+{
+  "workspace_path": "/home/zuoky/project2/first-workflow-case",
+  "novel_name": "白塔疑案",
+  "protagonist_name": "林舟",
+  "workspace_mode": "extend-existing",
+  "idea_counts": {
+    "total": 1,
+    "pending": 1,
+    "applied": 0,
+    "rejected": 0
+  },
+  "entity_counts": {
+    "characters": 1,
+    "events": 0,
+    "scenes": 0
+  },
+  "core_files": {
+    "state/canon-index.json": true,
+    "state/idea-log.json": true,
+    "state/workspace-status.json": true,
+    "timeline/events.json": true,
+    "outline/scene-index.json": true
+  },
+  "view_files": {
+    "index": "views/index.html",
+    "validation_report": "views/validation-report.html",
+    "timeline": "views/timeline.html"
+  },
+  "last_validation": {
+    "ok": true,
+    "error_count": 0,
+    "warning_count": 2,
+    "report_path": "/home/zuoky/project2/first-workflow-case/views/validation-report.html",
+    "validated_at": "2026-05-22T15:38:49Z"
+  },
+  "recommended_next_step": "优先处理 pending ideas，并把确认内容并入 canon / outline / timeline。",
+  "updated_at": "2026-05-22T15:38:49Z"
+}

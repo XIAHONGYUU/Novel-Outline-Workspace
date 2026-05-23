@@ -1,0 +1,19 @@
+{
+  "novel_name": "白塔疑案",
+  "characters": [
+    {
+      "id": "char-protagonist",
+      "name": "林舟",
+      "aliases": [],
+      "role": "protagonist",
+      "status": "alive",
+      "death_event_id": null
+    }
+  ],
+  "relationships": [],
+  "knowledge_states": [],
+  "world_rule_exceptions": [],
+  "locations": [],
+  "factions": [],
+  "items": []
+}

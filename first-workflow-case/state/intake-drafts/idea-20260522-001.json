@@ -1,0 +1,66 @@
+{
+  "idea_id": "idea-20260522-001",
+  "title": "林舟在白塔档案室发现泄密账册",
+  "kind": "reveal",
+  "tags": [
+    "林舟",
+    "由此知道议会",
+    "议会",
+    "泄密",
+    "reveal"
+  ],
+  "target_files": [
+    "outline/master-outline.md",
+    "outline/scene-index.json",
+    "timeline/events.json"
+  ],
+  "suggested_domains": [
+    "outline",
+    "timeline"
+  ],
+  "chapter_hints": [
+    3
+  ],
+  "location_candidates": [
+    "的白塔",
+    "白塔"
+  ],
+  "character_mentions": [
+    "林舟",
+    "议会"
+  ],
+  "canon_update_candidates": [],
+  "timeline_candidates": [
+    {
+      "event_label": "林舟在白塔档案室发现泄密账册",
+      "reading_chapter_hint": 3,
+      "location_candidates": [
+        "的白塔",
+        "白塔"
+      ],
+      "participant_candidates": [
+        "林舟",
+        "议会"
+      ]
+    }
+  ],
+  "outline_candidates": [
+    {
+      "scene_title": "林舟在白塔档案室发现泄密账册",
+      "chapter_hints": [
+        3
+      ],
+      "pov_candidates": [
+        "林舟",
+        "议会"
+      ],
+      "target_outline_files": [
+        "outline/master-outline.md",
+        "outline/scene-index.json"
+      ]
+    }
+  ],
+  "open_questions": [],
+  "confidence": "medium-high",
+  "created_at": "2026-05-22T15:38:49Z"
+}

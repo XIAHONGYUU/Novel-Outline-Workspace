@@ -127,6 +127,7 @@
 - `warning_count`
 - `issues`
 - `issues[].details`
+- `exemptions`
 - `knowledge_claims`
 - `patch_suggestions`
 - `draft_path`
@@ -135,6 +136,7 @@
 其中：
 
 - `issues[].details` 可携带具体 `record_id / existing_chapter / draft_chapter / rule_id` 等机器可消费上下文
+- `exemptions` 用于记录“这条 idea 本来会命中规则，但已被正式 canon / exception 放行”的结构化说明
 - `knowledge_claims` 用于记录从这条 idea 中提取出的“谁在何章知道了什么”的结构化信号
 - `patch_suggestions` 用于记录后续 merge 可直接消费的结构化修补建议
 
@@ -144,6 +146,42 @@
 - `rule_positive_token`
 - `rule_object`
 - `suggested_delay_chapter`
+
+对于已被正式例外放行的 `world-rule`，`exemptions[].details` 现在通常还会包含：
+
+- `matched_exception_id`
+- `matched_exception_subject_name`
+- `matched_exception_object_key`
+- `matched_exception_chapter`
+- `exception_scope`
+- `exception_scope_base`
+- `exception_subject_scope`
+- `exception_match_mode`
+
+在 `proposed_actions` 的 constraints grouped summary 里，如果某条 rule 已被正式 exception 覆盖，当前通常会写成：
+
+- `reuse-existing-exception`
+- `direct=1 / review=0` 或反过来
+- `subject_scope`
+- `exception_scope`
+- `exception_scope_base`
+- `exception_subject_scope`
+- `exception_match_mode`
+
+当前常见 token 约定：
+
+- `exception_scope_base`
+  例如 `same-chapter`、`prior-exception`
+- `exception_subject_scope`
+  例如 `shared-subject`、`split-subjects`
+- `exception_match_mode`
+  例如 `claim-match`、`local-signal`
+
+当前常见 review impact token：
+
+- `constraints:review-subject-scope`
+- `constraints:review-exception-chain`
+- `canon:review-exception-evidence`
 
 ## `state/idea-log.json`
 
