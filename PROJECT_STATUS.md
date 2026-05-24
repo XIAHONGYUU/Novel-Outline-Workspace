@@ -107,6 +107,21 @@
 - `world-rule` 在缺少 `knowledge_claims` 时，也开始按主体局部窗口抽取 knowledge signal；同章 exception 的同义 object 不再只靠整句字面命中，mixed-subject 句子里别人的 object 也不会误触发当前 rule
 - consistency report 开始显式输出 `world-rule-exemption-applied`，merge plan 在 clean gate 下也会补一条 exemption explainer，说明这是“已落地豁免”而不是“没有命中规则”
 - 对已落地的 world-rule exception，grouped summary 开始区分 `direct` 沿用和仍需 `review` 的主体范围；如果同一 idea 同时存在冲突 rule 和已豁免 rule，也会收敛进同一条 constraints 摘要
+- 如果多条 `world-rule conflict` 之间共享同一批 context，grouped summary 现在会先提一条 `shared-conflict-context`，把公共 `domains / targets` 上提
+- 如果多条 `world-rule conflict` 连动作层也完全相同，grouped summary 现在还会再提一条 `shared-conflict-actions`，把公共 `direct/review impacts` 与 `write_shapes` 上提
+- 如果只有一部分 conflict rule 共享同一套动作签名，grouped summary 现在也会按 `rules=...` 再提 subset 级 `shared-conflict-actions`
+- 如果同一批 conflict 连策略、direct/override 和主体范围也完全一致，grouped summary 现在还会再提一条 `shared-conflict-structure`
+- 如果策略或主体不同、但 `direct / override / subject_scope` 仍重复，grouped summary 现在也会按 `rules=...` 再提一条 `shared-conflict-structure-tokens`
+- 如果 mixed conflict 子组里 `strategies=` 或 `subjects=` 仍重复，grouped summary 现在也会按 `rules=...` 再提一条 `shared-conflict-rule-tokens`
+- 如果 mixed conflict 子组里 `domains=` 或 `targets=` 仍重复，grouped summary 现在也会按 `rules=...` 再提一条 `shared-conflict-rule-context`
+- 如果 mixed conflict 子组里 `direct_impacts=` 或 `review_impacts=` 仍重复，grouped summary 现在也会按 `rules=...` 再提一条 `shared-conflict-rule-impacts`
+- 如果不同 conflict 子组虽然整体签名不同，但还共享同一批 `write_shapes`，grouped summary 现在也会按 `rules=...` 再提一条 `shared-conflict-write-shapes`
+- conflict 侧成对出现的 `timeline / outline` 章节改写说明，现已开始收敛成跨域 `story-beat:*` token，减少不同子组之间重复的 scene/event 文案
+- conflict 侧 `constraints:rewrite-cutoff + story-beat:carry-forward`，现已开始收敛成跨域 `cutoff-resolution:carry-forward`
+- conflict 侧 `timeline / outline` 章节改写直写路径，现已开始收敛成跨域 `delay-resolution:rewrite-chapter`
+- conflict 侧成对出现的 exception note 写入说明，现已开始收敛成跨域 `exception-note:record`，减少重复的 canon / constraints review write-shape 文案
+- conflict 侧 `resolve-world-rule-by-updating-cutoff / resolve-world-rule-by-delaying-event` 的 impact，现已开始收敛成跨域 `cutoff-resolution:update-placement / delay-resolution:update-placement`
+- 如果某条 conflict rule 已被这些共享行完整覆盖，grouped summary 现在也不会再留空的 `rule-xxx:` 占位行
 - `exception_scope` 开始细分成 `exception_scope_base / exception_subject_scope / exception_match_mode`，并把 `review-subject-scope / review-exception-chain / review-exception-evidence` 这类 impact token 稳定写出
 - 对 `prior-exception`，review impacts 开始细分到 `canon:review-exception-continuity`、`constraints:review-exception-chain`、`timeline:review-post-exception-beat`、`outline:review-post-exception-scene`
 - 对 `prior-exception`，grouped summary 现在还会继续细分 `write_shapes`，直接区分 `keep-existing-exception-record / carry-forward-exception-note / append-post-exception-beat / append-post-exception-scene-note` 这类更接近执行层的复核动作
@@ -115,6 +130,7 @@
 - 对 `prior-exception + local-signal`，如果这轮没有可落地的 `event_id / scene_id`，grouped summary 现在会优先收敛到 `review-exception-evidence`，不再误带 `review-exception-chain`
 - 对 `prior-exception + local-signal`，如果别的主体只出现在主体窗口外，grouped summary 现在仍保持 `review-exception-evidence`；只有主体窗口内已经混进别的主体时，才会额外升级到 `review-subject-scope`
 - `same-chapter exemption` 的 review case 现在也开始补 `timeline:review-same-chapter-beat` / `outline:review-same-chapter-scene`，并和 `evidence-only / review-subject-scope` 规则保持一致
+- 如果同一条 idea 同时还有 `world-rule conflict`，grouped summary 现在会先提一条 `shared-world-rule-context`，把 conflict 行和 exemption 行共同拥有的 `domains / targets` 上提
 - 多条 exemption rule 共享同一批 review token 时，grouped summary 现在会先提一条 `shared-exemption-review`，把公共 `review_impacts / review_write_shapes / targets` 上提，减少逐条重复
 - 如果同一组 exemption 同时混有 `direct` 和 `review`，grouped summary 现在还会再提一条 `shared-exemption-base`，把公共 `impacts / targets / domains` 再上提一层
 - 对 `prior-exception + claim-match` 的叙事型 idea，如果这轮还没落到具体 event / scene，但已经是明确剧情 beat，grouped summary 现在仍会保留 `carry-forward-exception-note`

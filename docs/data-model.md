@@ -177,6 +177,156 @@
 - `exception_match_mode`
   例如 `claim-match`、`local-signal`
 
+如果一条 idea 同时命中多条 `world-rule conflict`，且这些冲突共享同一批 context，
+当前 constraints grouped summary 还可能先提一条：
+
+- `shared-conflict-context`
+
+这条共享行通常承载：
+
+- `domains`
+- `targets`
+
+也就是多条 conflict rule 共同拥有的公共上下文；各自的 `impacts / write_shapes`
+仍会留在对应的 `rule-xxx:` 行里。
+
+如果这些 conflict 连动作层也完全相同，当前 constraints grouped summary 还可能再提一条：
+
+- `shared-conflict-actions`
+
+这条共享行通常承载：
+
+- `direct_impacts`
+- `review_impacts`
+- `direct_write_shapes`
+- `review_write_shapes`
+
+而各自的 `rule-xxx:` 行则只继续保留策略、主体范围和差异字段。
+
+如果不是“全部 conflict 都一致”，而只是其中一个子集动作签名一致，
+当前 `shared-conflict-actions` 还可能进一步带出：
+
+- `rules=rule-001, rule-002`
+
+也就是一条 subset 级共享动作行，只把这部分冲突共同拥有的动作 token 上提。
+
+如果这些 conflict 连策略和主体范围也一致，当前 constraints grouped summary 还可能再提一条：
+
+- `shared-conflict-structure`
+
+这条共享行通常承载：
+
+- `rules=...`
+- `strategies=...`
+- `direct=...`
+- `override=...`
+- `subjects=...`
+- `subject_scope=...`
+
+也就是把重复的冲突元信息从逐条 `rule-xxx:` 行里再拿掉一层。
+
+如果策略或主体不同、但仍共享同一批结构 token，
+当前 constraints grouped summary 还可能再提一条：
+
+- `shared-conflict-structure-tokens`
+
+这条共享行通常承载：
+
+- `rules=...`
+- `direct=...`
+- `override=...`
+- `subject_scope=...`
+
+也就是只把重复的结构字段单独上提，而把各自不同的 `strategies / subjects`
+继续留在对应的 `rule-xxx:` 行里。
+
+如果 mixed conflict 子组里 `strategies / subjects` 也还有局部重复，
+当前 constraints grouped summary 还可能再提一条：
+
+- `shared-conflict-rule-tokens`
+
+这条共享行通常承载：
+
+- `rules=...`
+- `strategies=...`
+- `subjects=...`
+
+也就是只把重复的 rule 标签字段单独上提，而把各自仍不同的部分继续留在
+对应的 `rule-xxx:` 行里。
+
+如果 mixed conflict 子组里 `domains / targets` 也还有局部重复，
+当前 constraints grouped summary 还可能再提一条：
+
+- `shared-conflict-rule-context`
+
+这条共享行通常承载：
+
+- `rules=...`
+- `domains=...`
+- `targets=...`
+
+也就是只把重复的 rule 级 context 单独上提，而把各自仍不同的部分继续留在
+对应的 `rule-xxx:` 行里。
+
+如果 mixed conflict 子组里 `direct_impacts / review_impacts` 也还有局部重复，
+当前 constraints grouped summary 还可能再提一条：
+
+- `shared-conflict-rule-impacts`
+
+这条共享行通常承载：
+
+- `rules=...`
+- `direct_impacts=...`
+- `review_impacts=...`
+
+也就是只把重复的 rule 级 impact 字段单独上提，而把各自仍不同的部分继续留在
+对应的 `rule-xxx:` 行里。
+
+如果不同 conflict 子组虽然整体动作签名不同，但共享同一批写入形态，
+当前 constraints grouped summary 还可能再提一条：
+
+- `shared-conflict-write-shapes`
+
+这条共享行通常承载：
+
+- `rules=...`
+- `direct_write_shapes=...`
+- `review_write_shapes=...`
+
+也就是只把局部重合的 scene/event 写入形态单独上提。
+
+对于 conflict 侧直写路径的 scene/event 写入，当前 `write_shapes` 还可能进一步收敛成：
+
+- `cutoff-resolution:carry-forward`
+- `delay-resolution:rewrite-chapter`
+- `exception-note:record`
+
+其中 `cutoff-resolution:carry-forward` 用于把原本需要同时写出的
+`constraints:rewrite-cutoff / story-beat:carry-forward`
+压成一个跨域 token。
+
+其中 `delay-resolution:rewrite-chapter` 用于把原本需要同时写出的
+`timeline:rewrite-event-chapter / outline:rewrite-scene-chapter`
+压成一个跨域 token。
+
+其中 `exception-note:record` 用于把原本需要同时写出的
+`canon:record-exception-entry / constraints:append-exception-note`
+压成一个跨域 token。
+
+对应的直写路径 impact，当前也可能进一步收敛成：
+
+- `cutoff-resolution:update-placement`
+- `delay-resolution:update-placement`
+
+也就是把原本需要同时写出的冲突直写 impact 压成更稳定的跨域 token。
+
+如果某条 `world-rule conflict` 在扣掉这些共享行后已没有剩余字段，
+当前 grouped summary 也不会再保留一个空的：
+
+- `rule-001:`
+
+而是直接由对应的 `shared-conflict-*` 行代表它。
+
 当前常见 review impact token：
 
 - `constraints:review-subject-scope`
@@ -297,6 +447,18 @@
 - `domains`
 
 而不会重复承载已经属于 `shared-exemption-review` 的 review 专属 token。
+
+如果同一条 idea 同时还有 `world-rule conflict`，当前 constraints grouped summary 还可能再提一条：
+
+- `shared-world-rule-context`
+
+这条 context 行通常只承载：
+
+- `domains`
+- `targets`
+
+也就是 conflict 行和 exemption 行共同拥有的公共上下文；各自的 `impacts / write_shapes`
+仍会留在对应的 rule 行里。
 
 ## `state/idea-log.json`
 
