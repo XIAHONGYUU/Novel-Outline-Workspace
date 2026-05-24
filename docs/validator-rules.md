@@ -116,6 +116,7 @@
 - 但如果这类 narrative `claim-match` 同时落在 `split-subjects / mixed-subjects`，grouped summary 现在会退回 `annotate-existing-rule-note + review-subject-scope`，而不再默认 `carry-forward`
 - 对 `local-signal` 的多主体 case，当前还会继续区分“别的主体只在窗口外”与“主体窗口内已混主体”：前者仍只做 `review-exception-evidence`，后者才额外补 `review-subject-scope`
 - `same-chapter exemption` 的 review case 现在也会继续带出 `review-same-chapter-beat / review-same-chapter-scene`，并共用同一套 `local-signal` 窗口内/窗口外主体判定
+- 如果同一条 idea 同时还有 `world-rule conflict`，merge plan 现在还会先提一条 `shared-world-rule-context`，把 conflict 行与 exemption 行共同拥有的 `domains / targets` 上提，减少跨行重复
 - 如果多条已豁免 rule 共享同一批 `review_impacts / review_write_shapes / targets`，merge plan 现在还会先提一条 `shared-exemption-review`，把公共 review token 集中上提，减少逐条重复
 - 如果同一组 exemption 同时混有 `direct` 和 `review`，merge plan 现在还会再提一条 `shared-exemption-base`，把公共 `impacts / targets / domains` 上提，减少 mixed summary 里的重复
 - 如果同一主体同时抽到标题里的泛化 object 和正文里的更具体 object，`knowledge_claims` 会优先收敛到更具体那条
@@ -125,6 +126,19 @@
 - 不同 object family 的 claim 当前保持分离，避免把同章不同事实误收敛成一条
 - 当单条 idea 同时命中多条 `world-rule` 时，issue 细节会开始带回各自命中的 claim，供后续 merge plan 精确消费
 - merge plan 在多条 world-rule 场景下，现已开始先给 constraints 域分组摘要，再展开具体输入；摘要会带出每条 rule 的策略、targets、direct/override、按 direct / review 拆开的 impacts，以及 `shared-subject / split-subjects` exception scope
+- 如果多条 `world-rule conflict` 共享同一批 `domains / targets`，merge plan 现在还会先提一条 `shared-conflict-context`，把公共 context 集中上提，减少逐条重复
+- 如果多条 `world-rule conflict` 连 `direct / review impacts` 与 `write_shapes` 也完全相同，merge plan 现在还会再提一条 `shared-conflict-actions`，把公共动作 token 集中上提，减少逐条重复
+- 如果只有其中一个 conflict 子集共享同一套动作签名，merge plan 现在也会按 `rules=...` 再提 subset 级 `shared-conflict-actions`
+- 如果同一批 conflict 连策略、`direct / override` 和主体范围也一致，merge plan 现在还会再提一条 `shared-conflict-structure`
+- 如果策略或主体不同、但 `direct / override / subject_scope` 仍重复，merge plan 现在还会再提一条 `shared-conflict-structure-tokens`
+- 如果 mixed conflict 子组里 `strategies=` 或 `subjects=` 仍重复，merge plan 现在还会再提一条 `shared-conflict-rule-tokens`
+- 如果 mixed conflict 子组里 `domains=` 或 `targets=` 仍重复，merge plan 现在还会再提一条 `shared-conflict-rule-context`
+- 如果 mixed conflict 子组里 `direct_impacts=` 或 `review_impacts=` 仍重复，merge plan 现在还会再提一条 `shared-conflict-rule-impacts`
+- 如果不同 conflict 子组虽然整体动作签名不同，但共享同一批 `write_shapes`，merge plan 现在还会再提一条 `shared-conflict-write-shapes`
+- 对 conflict 侧直写路径，merge plan 现在还会把对应 `write_shapes` 收敛成 `delay-resolution:rewrite-chapter / cutoff-resolution:carry-forward`
+- 对 conflict 侧成对出现的 exception note 写入，merge plan 现在还会把对应 `write_shapes` 收敛成 `exception-note:record`，减少不同子组里的重复 canon / constraints review write-shape 文案
+- 对 conflict 侧直写路径，merge plan 现在也会把对应 `impacts` 收敛成 `delay-resolution:update-placement / cutoff-resolution:update-placement`
+- 如果某条 conflict rule 已被这些共享行完整覆盖，merge plan 现在也不会再留空的 `rule-xxx:` 占位行
 - 如果同章已经有正式 relationship beat，future same-state 记录也不会再把当前 idea 误报成关系漂移
 
 ## 当前未实现

@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from novel_outline_workspace import check_idea_consistency
-from novel_outline_workspace.merge import apply_idea_merge, plan_idea_merge
+from novel_outline_workspace.merge import _constraints_group_explainer, apply_idea_merge, plan_idea_merge
 from novel_outline_workspace.orchestrator import run_outline_workspace_pipeline
 from novel_outline_workspace.workspace import backfill_intake_drafts, collect_workspace_status, ingest_idea, init_workspace, read_json, validate_workspace, write_json
 
@@ -834,20 +834,41 @@ class WorkspaceTests(unittest.TestCase):
                 for action in plan["proposed_actions"]
                 if action["domain"] == "constraints" and action.get("merge_input_id") is None
             )
+            shared_conflict_actions = next(
+                line for line in constraints_summary["planned_writes"] if line.startswith("shared-conflict-actions")
+            )
+            shared_conflict_structure = next(
+                line for line in constraints_summary["planned_writes"] if line.startswith("shared-conflict-structure")
+            )
+            planned_text = " / ".join(constraints_summary["planned_writes"])
             self.assertEqual(constraints_summary["readiness"], "needs-review")
             self.assertIn("timeline/events.json", constraints_summary["target_files"])
             self.assertIn("constraints/constraints.json", constraints_summary["target_files"])
-            self.assertIn("rule-001", " / ".join(constraints_summary["planned_writes"]))
-            self.assertIn("direct=", " / ".join(constraints_summary["planned_writes"]))
-            self.assertIn("domains=", " / ".join(constraints_summary["planned_writes"]))
-            self.assertIn("impacts=", " / ".join(constraints_summary["planned_writes"]))
-            self.assertIn("direct_impacts=", " / ".join(constraints_summary["planned_writes"]))
-            self.assertIn("review_impacts=", " / ".join(constraints_summary["planned_writes"]))
-            self.assertIn("targets=", " / ".join(constraints_summary["planned_writes"]))
-            self.assertIn("rule-002", " / ".join(constraints_summary["planned_writes"]))
-            self.assertIn("timeline:update-event", " / ".join(constraints_summary["planned_writes"]))
-            self.assertIn("canon:record-exception", " / ".join(constraints_summary["planned_writes"]))
-            self.assertIn("constraints:update-cutoff", " / ".join(constraints_summary["planned_writes"]))
+            self.assertTrue(any(line.startswith("shared-conflict-context") for line in constraints_summary["planned_writes"]))
+            self.assertTrue(any(line.startswith("shared-conflict-actions") for line in constraints_summary["planned_writes"]))
+            self.assertTrue(any(line.startswith("shared-conflict-structure") for line in constraints_summary["planned_writes"]))
+            self.assertEqual(planned_text.count("canon/world-rules.md"), 1)
+            self.assertEqual(planned_text.count("constraints/constraints.json"), 1)
+            self.assertEqual(planned_text.count("outline/master-outline.md"), 1)
+            self.assertEqual(planned_text.count("outline/scene-index.json"), 1)
+            self.assertEqual(planned_text.count("state/canon-index.json"), 1)
+            self.assertEqual(planned_text.count("timeline/events.json"), 1)
+            self.assertIn("direct_impacts=cutoff-resolution:update-placement", shared_conflict_actions)
+            self.assertIn("review_impacts=canon:record-exception, constraints:note-exception", shared_conflict_actions)
+            self.assertIn("direct_write_shapes=cutoff-resolution:carry-forward", shared_conflict_actions)
+            self.assertIn("review_write_shapes=exception-note:record", shared_conflict_actions)
+            self.assertIn("rules=rule-001, rule-002", shared_conflict_structure)
+            self.assertIn("strategies=resolve-world-rule-by-updating-cutoff, document-world-rule-exception", shared_conflict_structure)
+            self.assertIn("direct=1", shared_conflict_structure)
+            self.assertIn("override=1", shared_conflict_structure)
+            self.assertIn("domains=", planned_text)
+            self.assertIn("direct_impacts=", planned_text)
+            self.assertIn("review_impacts=", planned_text)
+            self.assertIn("direct_write_shapes=", planned_text)
+            self.assertIn("review_write_shapes=", planned_text)
+            self.assertIn("targets=", planned_text)
+            self.assertNotIn("rule-001:", planned_text)
+            self.assertNotIn("rule-002:", planned_text)
             self.assertIn("constraints:note-exception", " / ".join(constraints_summary["planned_writes"]))
             self.assertTrue(any("world-rule conflict" in signal for signal in constraints_summary["source_signals"]))
             timeline_actions = [action for action in plan["proposed_actions"] if action["domain"] == "timeline"]
@@ -862,6 +883,743 @@ class WorkspaceTests(unittest.TestCase):
                 if action["domain"] == "canon" and action.get("merge_input_id") == "timeline-merge-rule-note-006"
             )
             self.assertTrue(any("议会内部有人泄密" in signal for signal in rule2_exception["source_signals"]))
+
+    def test_constraints_group_explainer_compresses_partial_shared_conflict_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            report = {
+                "issues": [],
+                "exemptions": [],
+            }
+            draft = {
+                "character_mentions": ["林舟"],
+            }
+            items = [
+                {
+                    "strategy": "resolve-world-rule-by-updating-cutoff",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                        "constraints/constraints.json",
+                    ],
+                    "apply_args": {"rule_id": "rule-001", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-001", "rule_subject_name": "林舟"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "resolve-world-rule-by-updating-cutoff",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                        "constraints/constraints.json",
+                    ],
+                    "apply_args": {"rule_id": "rule-002", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-002", "rule_subject_name": "林舟"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "resolve-world-rule-by-delaying-event",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-003", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-003", "rule_subject_name": "林舟"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+            ]
+            summary = _constraints_group_explainer(workspace, items, report, draft)
+            self.assertIsNotNone(summary)
+            planned = summary["planned_writes"]
+            global_shared = next(
+                line
+                for line in planned
+                if line.startswith("shared-conflict-actions") and "rules=" not in line
+            )
+            partial_shared = next(
+                line
+                for line in planned
+                if line.startswith("shared-conflict-actions") and "rules=rule-001, rule-002" in line
+            )
+            shared_structure = next(
+                line
+                for line in planned
+                if line.startswith("shared-conflict-structure") and "rules=rule-001, rule-002" in line
+            )
+            self.assertNotIn("direct_impacts=", global_shared)
+            self.assertIn("review_impacts=canon:record-exception, constraints:note-exception", global_shared)
+            self.assertIn("review_write_shapes=exception-note:record", global_shared)
+            self.assertIn("direct_impacts=cutoff-resolution:update-placement", partial_shared)
+            self.assertIn("direct_write_shapes=cutoff-resolution:carry-forward", partial_shared)
+            self.assertIn("strategies=resolve-world-rule-by-updating-cutoff, document-world-rule-exception", shared_structure)
+            self.assertIn("subject_scope=shared-subject", shared_structure)
+            rule3_line = next(line for line in planned if line.startswith("rule-003:"))
+            self.assertFalse(any(line == "rule-001:" for line in planned))
+            self.assertFalse(any(line == "rule-002:" for line in planned))
+            self.assertIn("direct_impacts=delay-resolution:update-placement", rule3_line)
+            self.assertIn("direct_write_shapes=delay-resolution:rewrite-chapter", rule3_line)
+            self.assertNotIn("review_impacts=", rule3_line)
+
+    def test_constraints_group_explainer_compresses_partial_shared_conflict_write_shapes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            report = {
+                "issues": [],
+                "exemptions": [],
+            }
+            draft = {
+                "character_mentions": ["林舟"],
+            }
+            items = [
+                {
+                    "strategy": "resolve-world-rule-by-updating-cutoff",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                        "constraints/constraints.json",
+                    ],
+                    "apply_args": {"rule_id": "rule-001", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-001", "rule_subject_name": "林舟"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "resolve-world-rule-by-updating-cutoff",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                        "constraints/constraints.json",
+                    ],
+                    "apply_args": {"rule_id": "rule-002", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "resolve-world-rule-by-delaying-event",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-002", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-002", "rule_subject_name": "林舟"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "resolve-world-rule-by-delaying-event",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-003", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-003", "rule_subject_name": "林舟"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+            ]
+            summary = _constraints_group_explainer(workspace, items, report, draft)
+            self.assertIsNotNone(summary)
+            planned = summary["planned_writes"]
+            shared_cutoff_shapes = next(
+                line
+                for line in planned
+                if line.startswith("shared-conflict-write-shapes")
+                and "rules=rule-001, rule-002" in line
+            )
+            shared_delay_shapes = next(
+                line
+                for line in planned
+                if line.startswith("shared-conflict-write-shapes")
+                and "rules=rule-002, rule-003" in line
+            )
+            self.assertIn(
+                "direct_write_shapes=cutoff-resolution:carry-forward",
+                shared_cutoff_shapes,
+            )
+            self.assertIn(
+                "direct_write_shapes=delay-resolution:rewrite-chapter",
+                shared_delay_shapes,
+            )
+            rule1_line = next(line for line in planned if line.startswith("rule-001:"))
+            rule2_line = next(line for line in planned if line.startswith("rule-002:"))
+            rule3_line = next(line for line in planned if line.startswith("rule-003:"))
+            self.assertNotIn("direct_write_shapes=", rule1_line)
+            self.assertNotIn("direct_write_shapes=", rule2_line)
+            self.assertNotIn("direct_write_shapes=", rule3_line)
+
+    def test_constraints_group_explainer_compresses_partial_shared_conflict_structure_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            report = {
+                "issues": [],
+                "exemptions": [],
+            }
+            draft = {
+                "character_mentions": ["林舟", "师姐"],
+            }
+            items = [
+                {
+                    "strategy": "resolve-world-rule-by-updating-cutoff",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                        "constraints/constraints.json",
+                    ],
+                    "apply_args": {"rule_id": "rule-001", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-001", "rule_subject_name": "林舟"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "resolve-world-rule-by-delaying-event",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-002", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-002", "rule_subject_name": "林舟"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "resolve-world-rule-by-updating-cutoff",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                        "constraints/constraints.json",
+                    ],
+                    "apply_args": {"rule_id": "rule-003", "rule_subject_name": "师姐"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-003", "rule_subject_name": "师姐"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+            ]
+            summary = _constraints_group_explainer(workspace, items, report, draft)
+            self.assertIsNotNone(summary)
+            planned = summary["planned_writes"]
+            shared_structure_tokens = next(
+                line
+                for line in planned
+                if line.startswith("shared-conflict-structure-tokens")
+                and "rules=rule-001, rule-002, rule-003" in line
+            )
+            self.assertIn("direct=1", shared_structure_tokens)
+            self.assertIn("override=1", shared_structure_tokens)
+            self.assertIn("subject_scope=split-subjects", shared_structure_tokens)
+            self.assertFalse(any(line.startswith("rule-001:") for line in planned))
+            rule2_line = next(line for line in planned if line.startswith("rule-002:"))
+            rule3_line = next(line for line in planned if line.startswith("rule-003:"))
+            self.assertNotIn("direct=1", rule2_line)
+            self.assertNotIn("override=1", rule2_line)
+            self.assertNotIn("subject_scope=split-subjects", rule2_line)
+            self.assertNotIn("direct=1", rule3_line)
+            self.assertNotIn("override=1", rule3_line)
+            self.assertNotIn("subject_scope=split-subjects", rule3_line)
+            self.assertNotIn("subjects=林舟", rule2_line)
+            self.assertIn("subjects=师姐", rule3_line)
+
+    def test_constraints_group_explainer_compresses_partial_shared_conflict_rule_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            report = {
+                "issues": [],
+                "exemptions": [],
+            }
+            draft = {
+                "character_mentions": ["林舟", "师姐"],
+            }
+            items = [
+                {
+                    "strategy": "resolve-world-rule-by-updating-cutoff",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                        "constraints/constraints.json",
+                    ],
+                    "apply_args": {"rule_id": "rule-001", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-001", "rule_subject_name": "林舟"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "resolve-world-rule-by-delaying-event",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-002", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-002", "rule_subject_name": "林舟"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "resolve-world-rule-by-updating-cutoff",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                        "constraints/constraints.json",
+                    ],
+                    "apply_args": {"rule_id": "rule-003", "rule_subject_name": "师姐"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-003", "rule_subject_name": "师姐"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+            ]
+            summary = _constraints_group_explainer(workspace, items, report, draft)
+            self.assertIsNotNone(summary)
+            planned = summary["planned_writes"]
+            shared_subjects = next(
+                line
+                for line in planned
+                if line.startswith("shared-conflict-rule-tokens")
+                and "rules=rule-001, rule-002" in line
+            )
+            shared_strategies = next(
+                line
+                for line in planned
+                if line.startswith("shared-conflict-rule-tokens")
+                and "rules=rule-001, rule-003" in line
+            )
+            self.assertIn("subjects=林舟", shared_subjects)
+            self.assertIn(
+                "strategies=resolve-world-rule-by-updating-cutoff, document-world-rule-exception",
+                shared_strategies,
+            )
+            self.assertFalse(any(line.startswith("rule-001:") for line in planned))
+            rule2_line = next(line for line in planned if line.startswith("rule-002:"))
+            rule3_line = next(line for line in planned if line.startswith("rule-003:"))
+            self.assertNotIn("subjects=林舟", rule2_line)
+            self.assertIn(
+                "strategies=resolve-world-rule-by-delaying-event, document-world-rule-exception",
+                rule2_line,
+            )
+            self.assertNotIn(
+                "strategies=resolve-world-rule-by-updating-cutoff, document-world-rule-exception",
+                rule3_line,
+            )
+            self.assertIn("subjects=师姐", rule3_line)
+
+    def test_constraints_group_explainer_compresses_partial_shared_conflict_rule_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            report = {
+                "issues": [],
+                "exemptions": [],
+            }
+            draft = {
+                "character_mentions": ["林舟"],
+            }
+            items = [
+                {
+                    "strategy": "resolve-world-rule-by-updating-cutoff",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                        "constraints/constraints.json",
+                    ],
+                    "apply_args": {"rule_id": "rule-001", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-001", "rule_subject_name": "林舟"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "resolve-world-rule-by-updating-cutoff",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                        "constraints/constraints.json",
+                    ],
+                    "apply_args": {"rule_id": "rule-002", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-002", "rule_subject_name": "林舟"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "resolve-world-rule-by-delaying-event",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-003", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+            ]
+            summary = _constraints_group_explainer(workspace, items, report, draft)
+            self.assertIsNotNone(summary)
+            planned = summary["planned_writes"]
+            shared_context = next(
+                line
+                for line in planned
+                if line.startswith("shared-conflict-rule-context")
+                and "rules=rule-001, rule-002" in line
+            )
+            self.assertIn("domains=canon, constraints", shared_context)
+            self.assertIn(
+                "targets=canon/world-rules.md, constraints/constraints.json, state/canon-index.json",
+                shared_context,
+            )
+            self.assertFalse(any(line.startswith("rule-001:") for line in planned))
+            self.assertFalse(any(line.startswith("rule-002:") for line in planned))
+            rule3_line = next(line for line in planned if line.startswith("rule-003:"))
+            self.assertNotIn("domains=canon, constraints", rule3_line)
+            self.assertNotIn("canon/world-rules.md", rule3_line)
+            self.assertNotIn("constraints/constraints.json", rule3_line)
+
+    def test_constraints_group_explainer_compresses_partial_shared_conflict_rule_impacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            report = {
+                "issues": [],
+                "exemptions": [],
+            }
+            draft = {
+                "character_mentions": ["林舟"],
+            }
+            items = [
+                {
+                    "strategy": "resolve-world-rule-by-updating-cutoff",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                        "constraints/constraints.json",
+                    ],
+                    "apply_args": {"rule_id": "rule-001", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-001", "rule_subject_name": "林舟"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "resolve-world-rule-by-updating-cutoff",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                        "constraints/constraints.json",
+                    ],
+                    "apply_args": {"rule_id": "rule-002", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "resolve-world-rule-by-delaying-event",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-002", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-002", "rule_subject_name": "林舟"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "resolve-world-rule-by-delaying-event",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "timeline/events.json",
+                        "outline/scene-index.json",
+                        "outline/master-outline.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-003", "rule_subject_name": "林舟"},
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "missing_fields": [],
+                },
+                {
+                    "strategy": "document-world-rule-exception",
+                    "source_issue_code": "world-rule-conflict",
+                    "target_files": [
+                        "state/canon-index.json",
+                        "constraints/constraints.json",
+                        "canon/world-rules.md",
+                    ],
+                    "apply_args": {"rule_id": "rule-003", "rule_subject_name": "林舟"},
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "missing_fields": [],
+                },
+            ]
+            summary = _constraints_group_explainer(workspace, items, report, draft)
+            self.assertIsNotNone(summary)
+            planned = summary["planned_writes"]
+            shared_impacts = next(
+                line
+                for line in planned
+                if line.startswith("shared-conflict-rule-impacts")
+                and "rules=rule-001, rule-002" in line
+            )
+            shared_delay_shapes = next(
+                line
+                for line in planned
+                if line.startswith("shared-conflict-write-shapes")
+                and "rules=rule-002, rule-003" in line
+            )
+            self.assertIn("direct_impacts=cutoff-resolution:update-placement", shared_impacts)
+            self.assertIn("direct_write_shapes=delay-resolution:rewrite-chapter", shared_delay_shapes)
+            rule1_line = next(line for line in planned if line.startswith("rule-001:"))
+            rule2_line = next(line for line in planned if line.startswith("rule-002:"))
+            rule3_line = next(line for line in planned if line.startswith("rule-003:"))
+            self.assertNotIn("direct_impacts=cutoff-resolution:update-placement", rule1_line)
+            self.assertNotIn("direct_impacts=cutoff-resolution:update-placement", rule2_line)
+            self.assertNotIn("direct_impacts=cutoff-resolution:update-placement", rule3_line)
+            self.assertNotIn("direct_write_shapes=delay-resolution:rewrite-chapter", rule3_line)
 
     def test_world_rule_merge_plan_marks_split_exception_scope_for_multiple_subjects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3265,8 +4023,13 @@ class WorkspaceTests(unittest.TestCase):
             ]
             self.assertEqual(len(constraints_summaries), 1)
             summary = constraints_summaries[0]
+            planned = summary["planned_writes"]
             summary_text = " ".join(summary["planned_writes"])
             self.assertIn("其中 1 条仍需处理，1 条已有正式 exception 覆盖", summary["summary"])
+            self.assertTrue(any(line.startswith("shared-world-rule-context") for line in planned))
+            self.assertEqual(summary_text.count("canon/world-rules.md"), 1)
+            self.assertEqual(summary_text.count("constraints/constraints.json"), 1)
+            self.assertEqual(summary_text.count("state/canon-index.json"), 1)
             self.assertIn("rule-001: reuse-existing-exception", summary_text)
             self.assertIn("rule-002:", summary_text)
             self.assertTrue(any("world-rule conflict x1" in signal for signal in summary["source_signals"]))

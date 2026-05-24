@@ -64,6 +64,19 @@
   当一条 idea 同时命中多条 world-rule 时，
   `plan_idea_merge` 会先给出 constraints 级摘要，再展开每条 rule 的具体处理输入；
   摘要中会直接列出每条 rule 的策略、目标文件、direct/override 信息，以及按 direct / review 拆开的跨 domain impacts，
+  如果多条 `world-rule conflict` 之间共享同一批 context，grouped summary 现在还会先提一条 `shared-conflict-context`，把公共 `domains / targets` 上提，
+  如果多条 `world-rule conflict` 连动作层也完全相同，grouped summary 现在还会再提一条 `shared-conflict-actions`，把公共 `direct/review impacts` 与 `write_shapes` 上提，
+  如果只有其中一个子集的 conflict 动作签名一致，grouped summary 现在也会按 `rules=...` 再提 subset 级 `shared-conflict-actions`，继续压掉局部重复，
+  如果同一批 conflict 连策略、direct/override 和主体范围也完全一致，grouped summary 现在还会再提一条 `shared-conflict-structure`，把这些元信息从逐条 rule 行里拿掉，
+  如果策略或主体不同、但 `direct / override / subject_scope` 这类结构 token 仍重复，grouped summary 现在也会按 `rules=...` 再提一条 `shared-conflict-structure-tokens`，
+  如果 mixed conflict 子组里 `strategies=` 或 `subjects=` 仍重复，grouped summary 现在也会按 `rules=...` 再提一条 `shared-conflict-rule-tokens`，
+  如果 mixed conflict 子组里 `domains=` 或 `targets=` 仍重复，grouped summary 现在也会按 `rules=...` 再提一条 `shared-conflict-rule-context`，
+  如果 mixed conflict 子组里 `direct_impacts=` 或 `review_impacts=` 仍重复，grouped summary 现在也会按 `rules=...` 再提一条 `shared-conflict-rule-impacts`，
+  如果不同 conflict 子组虽然整体签名不同，但还共享同一批 scene/event `write_shapes`，grouped summary 现在也会按 `rules=...` 再提一条 `shared-conflict-write-shapes`，
+  并开始把 delaying-event / updating-cutoff 这两条冲突写入路径收敛成跨域 `delay-resolution:rewrite-chapter`、`cutoff-resolution:carry-forward` token，减少不同子组里重复的 scene/event 文案，
+  同时也开始把成对出现的 exception note 写入形态收敛成 `exception-note:record`，减少重复的 canon / constraints review write-shape 文案，
+  同时也开始把 delaying-event / updating-cutoff 这两条冲突 impact 收敛成跨域 `delay-resolution:update-placement`、`cutoff-resolution:update-placement`，减少不同子组里重复的 scene/event impact 文案，
+  如果某条 conflict rule 的 context、actions、structure 都已经被共享行完整代表，grouped summary 现在也不会再留空的 `rule-xxx:` 占位行，
   并开始区分哪些 rule 仍在同一主体链上、哪些 exception 需要按 `split-subjects` 分开解释，
   同一主体下若标题和正文同时抽到泛化 object 与更具体 object，claim 层会优先收敛到更具体那条，
   多主体句子里如果前后主体对应不同 object，claim 层也会优先按主体窗口拆开，避免把后一个主体的 object 串回前一个主体，
@@ -85,6 +98,7 @@
   但如果同一个 `claim-match` 叙事型 case 同时落在 `split-subjects / mixed-subjects`，grouped summary 会退回 `annotate-existing-rule-note + review-subject-scope`，不再默认共用同一条 exception chain，
   对 `local-signal` 也开始区分“别的主体只出现在窗外”与“主体窗口内已经混进别的主体”：前者继续只做 `review-exception-evidence`，后者会额外升级到 `review-subject-scope`，
   同样的说明层也开始回流到 `same-chapter exemption`：如果 `same-chapter` 的 review case 仍涉及 timeline / outline 落地，grouped summary 会直接写出 `review-same-chapter-beat / review-same-chapter-scene`，
+  如果同一条 idea 同时还有 `world-rule conflict`，grouped summary 现在还会先提一条 `shared-world-rule-context`，把 conflict 行和 exemption 行共同拥有的 `domains / targets` 上提，
   当多条 exemption rule 共享同一批 review token 时，grouped summary 现在还会先提一条 `shared-exemption-review`，把公共 `review_impacts / review_write_shapes / targets` 上提，减少逐条重复，
   如果同一组 exemption 同时混有 `direct` 和 `review`，grouped summary 现在还会再提一条 `shared-exemption-base`，把公共 `impacts / targets / domains` 再上提一层，
   canon 侧 exception explainer 也会对齐到各自命中的 claim，

@@ -506,6 +506,316 @@
 
 ## 2026-05-23
 
+### 决策：不同 conflict 子组之间共享的 `write_shapes` 也单独上提
+
+当前状态：
+
+- `shared-conflict-actions` 已能处理“动作签名完全一致”的全体共享或子集共享
+- 但如果两个 conflict 子组只共享一部分 `write_shapes`，整体动作签名不同，这部分 scene/event 写入说明仍会在逐条 rule 行里重复
+
+因此这轮再补一条更细的 shape 共享行：
+
+- 当不同 conflict 子组共享同一批 `direct/review write_shapes` 时，先提一条 `shared-conflict-write-shapes`
+- 这条行按 `rules=...` 标记它覆盖的 conflict 子集
+- 对应 rule 行再扣掉这些共享 shape token
+
+原因：
+
+- 先把“动作签名整体一致”和“只是写入形态局部一致”拆开
+- 不改变 impacts 或策略判断，只继续压 scene/event 写入说明的重复
+- 后续如果要把这些 shape 再映射到更自然的 explainer 文案，也有稳定的共享层可复用
+
+### 决策：冲突侧直写路径的 timeline/outline 写入形态收敛成跨域 token
+
+当前状态：
+
+- `shared-conflict-write-shapes` 已能把不同 conflict 子组里完全相同的 `write_shapes` 上提
+- 但 updating-cutoff / delaying-event 这两条直写路径的 scene/event 写入，仍会在不同子组之间重复出现
+
+因此这轮补一层更稳定的跨域 token：
+
+- 把 updating-cutoff 的直写组合收敛成 `cutoff-resolution:carry-forward`
+- 把 delaying-event 的直写组合收敛成 `delay-resolution:rewrite-chapter`
+- `exception-note:record` 这类别的跨域写入 token 继续单独处理
+
+原因：
+
+- 直接压掉冲突子组之间重复的 scene/event 文案，而不是继续堆叠新说明行
+- 保留 `targets / domains / impacts` 提供的 timeline 与 outline 影响面，不需要在 `write_shapes` 再重复两次
+- 给下一步继续压冲突直写路径的 impact 留出一致的 token 方向
+
+### 决策：冲突侧成对的 exception note 写入形态收敛成 `exception-note:record`
+
+当前状态：
+
+- `story-beat:*` 已能压掉冲突子组之间重复的 scene/event 写入文案
+- 但 `canon:record-exception-entry + constraints:append-exception-note` 这对 review write-shape 仍经常一起出现
+
+因此这轮继续补一层跨域 token：
+
+- 把这对 exception note 写入收敛成 `exception-note:record`
+- `targets / domains` 继续负责保留 canon 与 constraints 的影响面
+
+原因：
+
+- 继续压掉冲突子组之间重复的 review write-shape 文案
+- 让冲突侧跨域 write-shape token 不只覆盖 story beat，也覆盖 exception note
+- 不改变 exemption 侧已有的更细 write-shape 语义
+
+### 决策：冲突侧 `constraints:rewrite-cutoff + story-beat:carry-forward` 收敛成 `cutoff-resolution:carry-forward`
+
+当前状态：
+
+- `story-beat:*` 已能压掉冲突子组之间重复的 scene/event 写入文案
+- 但 `resolve-world-rule-by-updating-cutoff` 这条直写路径仍会稳定带出 `constraints:rewrite-cutoff + story-beat:carry-forward`
+
+因此这轮继续补一层跨域 token：
+
+- 把这组直写组合收敛成 `cutoff-resolution:carry-forward`
+- `impacts` 继续通过 `cutoff-resolution:update-placement` 保留执行语义
+
+原因：
+
+- 继续压掉冲突子组之间重复的 direct write-shape 文案
+- 让冲突侧跨域 write-shape token 同时覆盖 cutoff resolution、story beat 和 exception note
+- 不改变现有 impact 层的分组与判定
+
+### 决策：冲突侧直写路径 impacts 收敛成 `delay-resolution:update-placement / cutoff-resolution:update-placement`
+
+当前状态：
+
+- `cutoff-resolution:carry-forward / delay-resolution:rewrite-chapter` 已能压掉不同 conflict 子组之间重复的 scene/event 写入文案
+- 但 `shared-conflict-actions` 里仍会重复出现 updating-cutoff / delaying-event 的 impact 说明
+
+因此这轮继续补一层 impact 收敛：
+
+- 把 updating-cutoff 的 impact 收敛成 `cutoff-resolution:update-placement`
+- 把 delaying-event 的 impact 收敛成 `delay-resolution:update-placement`
+- `canon:record-exception` 这类非直写 impact 继续保留原样
+
+原因：
+
+- 让 `impacts` 和 `write_shapes` 的跨域 resolution 语义保持一致
+- 继续压掉 conflict 子组之间重复的 scene/event impact 文案
+- 仍保留 `targets / domains` 作为 timeline 与 outline 影响面的事实来源
+
+### 决策：mixed conflict 子组里重复的结构字段上提成 `shared-conflict-structure-tokens`
+
+当前状态：
+
+- `shared-conflict-structure` 已能处理“策略、主体、direct/override、subject_scope 全都一致”的整组共享
+- 但在 mixed direct/review conflict 子组里，经常只有 `direct / override / subject_scope` 重复，而 `strategies / subjects` 不同
+
+因此这轮再补一条更细的结构共享行：
+
+- 当不同 conflict 子组共享同一批 `direct / override / subject_scope` 时，先提一条 `shared-conflict-structure-tokens`
+- 这条行按 `rules=...` 标记它覆盖的冲突子集
+- 各自的 `rule-xxx:` 行继续只保留不同的 `strategies / subjects`
+
+原因：
+
+- 不破坏现有 `shared-conflict-structure` 代表“完整结构签名一致”的语义
+- 继续压掉 mixed 子组里重复的结构字段
+- 给下一步继续收 `subjects / strategies` 文案留下独立层次
+
+### 决策：mixed conflict 子组里重复的 `subjects / strategies` 上提成 `shared-conflict-rule-tokens`
+
+当前状态：
+
+- `shared-conflict-structure-tokens` 已能把 mixed 子组里重复的 `direct / override / subject_scope` 上提
+- 但 `rule-xxx:` 行里仍经常重复出现同一批 `strategies=` 或 `subjects=`
+
+因此这轮再补一条更细的 rule 标签共享行：
+
+- 当不同 conflict 子组共享同一批 `strategies=` 或 `subjects=` 时，先提一条 `shared-conflict-rule-tokens`
+- 这条行按 `rules=...` 标记它覆盖的冲突子集
+- 各自的 `rule-xxx:` 行再扣掉这些已共享的标签字段
+
+原因：
+
+- 继续压掉 mixed 子组里逐条重复的 rule 标签文案
+- 不改变现有 `shared-conflict-structure` 和 `shared-conflict-structure-tokens` 的职责边界
+- 给下一步继续压 rule 级 `domains / targets` 留出更干净的逐条行
+
+### 决策：mixed conflict 子组里重复的 `domains / targets` 上提成 `shared-conflict-rule-context`
+
+当前状态：
+
+- `shared-conflict-rule-tokens` 已能把 mixed 子组里重复的 `subjects / strategies` 上提
+- 但逐条 `rule-xxx:` 行里仍可能重复出现同一批 `domains=` 或 `targets=`
+
+因此这轮再补一条更细的 context 共享行：
+
+- 当不同 conflict 子组共享同一批 `domains=` 或 `targets=` 时，先提一条 `shared-conflict-rule-context`
+- 这条行按 `rules=...` 标记它覆盖的冲突子集
+- 各自的 `rule-xxx:` 行再扣掉这些已共享的 context 字段
+
+原因：
+
+- 继续压掉 mixed 子组里逐条重复的 rule 级 context 文案
+- 不改变全局 `shared-conflict-context` 代表“所有 conflict 都共享”的语义
+- 给下一步继续收 rule 级 `direct/review shape` 组合留下更干净的逐条行
+
+### 决策：mixed conflict 子组里重复的 `direct/review impacts` 上提成 `shared-conflict-rule-impacts`
+
+当前状态：
+
+- `shared-conflict-rule-context` 已能把 mixed 子组里重复的 `domains / targets` 上提
+- 但逐条 `rule-xxx:` 行里仍可能重复出现同一批 `direct_impacts=` 或 `review_impacts=`
+
+因此这轮再补一条更细的 impact 共享行：
+
+- 当不同 conflict 子组共享同一批 `direct_impacts=` 或 `review_impacts=` 时，先提一条 `shared-conflict-rule-impacts`
+- 这条行按 `rules=...` 标记它覆盖的冲突子集
+- 各自的 `rule-xxx:` 行再扣掉这些已共享的 impact 字段
+
+原因：
+
+- 继续压掉 mixed 子组里逐条重复的 rule 级 impact 文案
+- 不改变更上层 `shared-conflict-actions` 代表“整组动作签名共享”的语义
+- 给下一步继续收 rule 级 `direct/review write-shape` 组合留下更干净的逐条行
+
+---
+
+## 2026-05-23
+
+### 决策：被共享行完全覆盖的 conflict rule 不再保留空占位
+
+当前状态：
+
+- `shared-conflict-context / actions / structure` 已经能把大量重复信息上提
+- 但当某条 conflict rule 的所有字段都被共享行吃掉之后，逐条列表里还会剩一个空的 `rule-xxx:`
+
+因此这轮把这类空占位直接拿掉：
+
+- 如果 conflict rule 在扣掉共享 context、actions、structure 后没有任何剩余字段，就不再输出单独的 `rule-xxx:` 行
+- 仍由对应的共享行承担可读性和定位作用
+
+原因：
+
+- 空占位不会提供额外信息，只会增加扫描噪音
+- 用户仍能通过 `shared-conflict-structure rules=...` 定位哪些 rule 被一起收敛
+- 这样后续继续处理剩余 write-shape 差异时，列表会更干净
+
+---
+
+## 2026-05-23
+
+### 决策：冲突元信息也单独上提成 `shared-conflict-structure`
+
+当前状态：
+
+- `shared-conflict-actions` 已经能压掉冲突动作层的全体共享和子集共享
+- 但在很多多冲突 case 里，逐条 rule 行里还会重复同一套策略、`direct / override` 计数和主体范围
+
+因此这轮再补一条更轻的结构共享行：
+
+- 当一批 conflict 连策略列表、`direct / override` 计数、`subjects / subject_scope` 都一致时，先提一条 `shared-conflict-structure`
+- 对应 rule 行只再保留自己的差异字段
+- 如果某条 rule 在 context、actions、structure 三层都被上提干净，逐条行就只剩 `rule-xxx:`
+
+原因：
+
+- 先把“做什么”“怎么做”和“这条 rule 自己还剩什么差异”彻底拆开
+- 不改变任何 merge 语义，只减少多冲突场景里的横向对照成本
+- 后续再细化剩余 write-shape 文案时，也不会再被这些固定元信息干扰
+
+---
+
+## 2026-05-23
+
+### 决策：冲突动作共享不只看“全体一致”，同签名子集也单独上提
+
+当前状态：
+
+- `shared-conflict-actions` 已经能压掉“所有 conflict 都完全相同”的动作 token
+- 但如果是 3 条以上 conflict，只有其中一个子集动作签名一致，剩余 rule 不同，这些局部共享动作还会留在逐条 rule 行里重复
+
+因此这轮把共享动作再放宽一层：
+
+- 继续保留“全体共享”的 `shared-conflict-actions`
+- 如果某个 conflict 子集在扣掉全体共享值后，剩余 `direct/review impacts` 与 `write_shapes` 仍完全一致，就再提一条带 `rules=...` 的 subset 级 `shared-conflict-actions`
+- 对应 rule 行再扣掉这条 subset 共享动作
+
+原因：
+
+- 先把“全体共享”和“局部共享”拆开
+- 不要求所有 conflict 都同形，部分重复也能继续压缩
+- 这样后续如果再细化到 write-shape 层的部分共享，也可以复用同一套签名分组逻辑
+
+---
+
+## 2026-05-23
+
+### 决策：多条 `world-rule conflict` 动作层完全相同时，再上提 `shared-conflict-actions`
+
+当前状态：
+
+- `shared-conflict-context` 已经能压掉多条 conflict 行之间重复的 `domains / targets`
+- 但当多条 conflict 连 `direct/review impacts` 和 `write_shapes` 也完全相同时，这些动作 token 仍会在每条 rule 行里重复
+
+因此这轮再补一条冲突动作共享行：
+
+- 当多条 conflict 共享同一批 `direct/review impacts` 与 `write_shapes` 时，先提一条 `shared-conflict-actions`
+- 这条行只承载动作层共享 token
+- 每条 conflict 行再扣掉这些共享动作，只保留策略、主体范围和差异字段
+
+原因：
+
+- 先把冲突动作层里完全相同的 token 再上提一层
+- 不会改变冲突分流和 readiness，只继续压缩 summary 噪音
+- 后续如果再遇到“部分相同、部分不同”的冲突动作，也可以继续沿用同一套共享值裁剪逻辑
+
+---
+
+## 2026-05-23
+
+### 决策：多条 `world-rule conflict` 共享同一批 context 时，先上提 `shared-conflict-context`
+
+当前状态：
+
+- `shared-world-rule-context` 已经能压掉 conflict 行和 exemption 行之间共同拥有的 `domains / targets`
+- 但在纯多冲突场景里，冲突行之间的 `domains / targets` 仍会整条重复
+
+因此这轮先补一条 conflict 专用的共享行：
+
+- 当至少两条 conflict rule 共享同一批 `domains / targets` 时，先提一条 `shared-conflict-context`
+- 这条行只承载 conflict 行之间公共的 context
+- 每条 conflict 行再扣掉这些共享字段，只保留自己的策略、impact、write-shape
+
+原因：
+
+- 先把冲突行内部的公共上下文提出来
+- 不改变冲突策略和 readiness，只压缩说明层噪音
+- 后续如果继续压冲突行之间共享的 `impacts / write_shapes`，可以继续沿用这套分层
+
+---
+
+## 2026-05-23
+
+### 决策：`world-rule conflict` 与 exemption 共存时，先上提 `shared-world-rule-context`
+
+当前状态：
+
+- `shared-exemption-base` 和 `shared-exemption-review` 已经能压掉 exemption 行内部的重复
+- 但如果同一条 idea 同时还有 `world-rule conflict`，冲突行和 exemption 行仍会一起重复 `canon / constraints` 这类公共 `domains / targets`
+
+因此这轮先补一条更外层的 context 行：
+
+- 当 conflict 与 exemption 共存时，先提一条 `shared-world-rule-context`
+- 这条行只承载所有 rule 共用的 `domains / targets`
+- conflict 行和 exemption 行各自再扣掉这些公共 context，只保留自己的策略、impact、write-shape
+
+原因：
+
+- 先把“公共上下文”与“各自处理动作”拆开
+- 不会把 conflict 的动作 token 和 exemption 的复用 token 混成一层
+- 后续如果继续压 conflict 行之间的重复，也可以复用同一层 context 思路
+
+---
+
+## 2026-05-23
+
 ### 决策：`direct / review` 混合 exemption 先再提一条 `shared-exemption-base`
 
 当前状态：

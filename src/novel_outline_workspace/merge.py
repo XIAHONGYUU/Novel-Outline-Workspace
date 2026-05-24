@@ -307,13 +307,10 @@ def _world_rule_impacts_for_item(item: dict[str, Any]) -> list[str]:
     strategy = str(item.get("strategy") or "").strip()
     impact_map = {
         "resolve-world-rule-by-delaying-event": [
-            "timeline:update-event",
-            "outline:update-scene",
+            "delay-resolution:update-placement",
         ],
         "resolve-world-rule-by-updating-cutoff": [
-            "timeline:update-event",
-            "outline:update-scene",
-            "constraints:update-cutoff",
+            "cutoff-resolution:update-placement",
         ],
         "document-world-rule-exception": [
             "constraints:note-exception",
@@ -401,6 +398,65 @@ def _shared_values_for_rules(rule_map: dict[str, set[str]], rule_ids: list[str])
     for value_set in values[1:]:
         shared &= value_set
     return shared
+
+
+def _signature_values_for_rules(
+    rule_ids: list[str],
+    *rule_maps: dict[str, set[str]],
+) -> list[tuple[list[str], tuple[tuple[str, ...], ...]]]:
+    grouped: dict[tuple[tuple[str, ...], ...], list[str]] = {}
+    for rule_id in rule_ids:
+        signature = tuple(
+            tuple(sorted(rule_map.get(rule_id, set())))
+            for rule_map in rule_maps
+        )
+        if not any(signature):
+            continue
+        grouped.setdefault(signature, []).append(rule_id)
+    return [
+        (sorted(group_rule_ids), signature)
+        for signature, group_rule_ids in grouped.items()
+        if len(group_rule_ids) >= 2
+    ]
+
+
+def _group_rules_by_signature(
+    rule_ids: list[str],
+    signature_by_rule: dict[str, Any],
+) -> list[tuple[list[str], Any]]:
+    grouped: dict[Any, list[str]] = {}
+    for rule_id in rule_ids:
+        if rule_id not in signature_by_rule:
+            continue
+        grouped.setdefault(signature_by_rule[rule_id], []).append(rule_id)
+    return [
+        (sorted(group_rule_ids), signature)
+        for signature, group_rule_ids in grouped.items()
+        if len(group_rule_ids) >= 2
+    ]
+
+
+def _group_rule_tokens_by_support(
+    rule_ids: list[str],
+    direct_map: dict[str, set[str]],
+    review_map: dict[str, set[str]],
+) -> list[tuple[list[str], set[str], set[str]]]:
+    grouped: dict[tuple[str, ...], dict[str, set[str]]] = {}
+    for token_map, bucket in ((direct_map, "direct"), (review_map, "review")):
+        token_support: dict[str, list[str]] = {}
+        for rule_id in rule_ids:
+            for token in token_map.get(rule_id, set()):
+                token_support.setdefault(token, []).append(rule_id)
+        for token, support_rule_ids in token_support.items():
+            support = tuple(sorted(set(support_rule_ids)))
+            if len(support) < 2:
+                continue
+            grouped.setdefault(support, {"direct": set(), "review": set()})[bucket].add(token)
+    return [
+        (list(support), payload["direct"], payload["review"])
+        for support, payload in grouped.items()
+        if payload["direct"] or payload["review"]
+    ]
 
 
 def _world_rule_exemption_write_shapes(
@@ -514,11 +570,11 @@ def _constraints_group_explainer(
         impacts = _world_rule_impacts_for_item(item)
         impacts_by_rule.setdefault(rule_id, set()).update(impacts)
         if strategy == "resolve-world-rule-by-delaying-event":
-            write_shapes = {"timeline:rewrite-event-chapter", "outline:rewrite-scene-chapter"}
+            write_shapes = {"delay-resolution:rewrite-chapter"}
         elif strategy == "resolve-world-rule-by-updating-cutoff":
-            write_shapes = {"constraints:rewrite-cutoff", "timeline:carry-event-forward", "outline:carry-scene-forward"}
+            write_shapes = {"cutoff-resolution:carry-forward"}
         elif strategy == "document-world-rule-exception":
-            write_shapes = {"constraints:append-exception-note", "canon:record-exception-entry"}
+            write_shapes = {"exception-note:record"}
         else:
             write_shapes = set()
         write_shapes_by_rule.setdefault(rule_id, set()).update(write_shapes)
@@ -678,6 +734,38 @@ def _constraints_group_explainer(
     emit_shared_exemption_base = len(direct_exemption_rule_ids) >= 2 or (
         bool(direct_exemption_rule_ids) and bool(review_exemption_rule_ids)
     )
+    emit_shared_rule_context = bool(conflict_rule_ids) and bool(exemption_rule_ids)
+    shared_rule_targets = (
+        _shared_values_for_rules(targets_by_rule, rule_ids) if emit_shared_rule_context else set()
+    )
+    shared_rule_domains = (
+        _shared_values_for_rules(domains_by_rule, rule_ids) if emit_shared_rule_context else set()
+    )
+    emit_shared_conflict_context = len(conflict_rule_ids) >= 2
+    shared_conflict_targets = (
+        _shared_values_for_rules(targets_by_rule, conflict_rule_ids) if emit_shared_conflict_context else set()
+    )
+    shared_conflict_domains = (
+        _shared_values_for_rules(domains_by_rule, conflict_rule_ids) if emit_shared_conflict_context else set()
+    )
+    shared_conflict_impacts = (
+        _shared_values_for_rules(impacts_by_rule, conflict_rule_ids) if emit_shared_conflict_context else set()
+    )
+    shared_conflict_direct_impacts = (
+        _shared_values_for_rules(direct_impacts_by_rule, conflict_rule_ids) if emit_shared_conflict_context else set()
+    )
+    shared_conflict_review_impacts = (
+        _shared_values_for_rules(review_impacts_by_rule, conflict_rule_ids) if emit_shared_conflict_context else set()
+    )
+    shared_conflict_write_shapes = (
+        _shared_values_for_rules(write_shapes_by_rule, conflict_rule_ids) if emit_shared_conflict_context else set()
+    )
+    shared_conflict_direct_write_shapes = (
+        _shared_values_for_rules(direct_write_shapes_by_rule, conflict_rule_ids) if emit_shared_conflict_context else set()
+    )
+    shared_conflict_review_write_shapes = (
+        _shared_values_for_rules(review_write_shapes_by_rule, conflict_rule_ids) if emit_shared_conflict_context else set()
+    )
     shared_exemption_impacts = (
         _shared_values_for_rules(impacts_by_rule, exemption_rule_ids) if emit_shared_exemption_base else set()
     )
@@ -694,56 +782,397 @@ def _constraints_group_explainer(
     shared_review_write_shapes = _shared_values_for_rules(review_write_shapes_by_rule, review_exemption_rule_ids)
     shared_review_targets = _shared_values_for_rules(targets_by_rule, review_exemption_rule_ids)
     shared_review_domains = _shared_values_for_rules(domains_by_rule, review_exemption_rule_ids)
+    conflict_direct_impacts_by_rule = {
+        rule_id: set(direct_impacts_by_rule.get(rule_id, set())) - shared_conflict_direct_impacts
+        for rule_id in conflict_rule_ids
+    }
+    conflict_review_impacts_by_rule = {
+        rule_id: set(review_impacts_by_rule.get(rule_id, set())) - shared_conflict_review_impacts
+        for rule_id in conflict_rule_ids
+    }
+    conflict_direct_write_shapes_by_rule = {
+        rule_id: set(direct_write_shapes_by_rule.get(rule_id, set())) - shared_conflict_direct_write_shapes
+        for rule_id in conflict_rule_ids
+    }
+    conflict_review_write_shapes_by_rule = {
+        rule_id: set(review_write_shapes_by_rule.get(rule_id, set())) - shared_conflict_review_write_shapes
+        for rule_id in conflict_rule_ids
+    }
+    shared_conflict_action_groups = _signature_values_for_rules(
+        conflict_rule_ids,
+        conflict_direct_impacts_by_rule,
+        conflict_review_impacts_by_rule,
+        conflict_direct_write_shapes_by_rule,
+        conflict_review_write_shapes_by_rule,
+    )
+    conflict_structure_signature_by_rule = {
+        rule_id: (
+            tuple(str(item) for item in strategies_by_rule.get(rule_id, [])),
+            int(direct_by_rule.get(rule_id, 0)),
+            int(override_by_rule.get(rule_id, 0)),
+            tuple(sorted(subjects_by_rule.get(rule_id, set()))),
+            _world_rule_subject_scope(subjects_by_rule.get(rule_id, set()), all_subjects),
+        )
+        for rule_id in conflict_rule_ids
+    }
+    shared_conflict_structure_groups = _group_rules_by_signature(conflict_rule_ids, conflict_structure_signature_by_rule)
+    conflict_group_direct_impacts_by_rule: dict[str, set[str]] = {}
+    conflict_group_review_impacts_by_rule: dict[str, set[str]] = {}
+    conflict_group_direct_write_shapes_by_rule: dict[str, set[str]] = {}
+    conflict_group_review_write_shapes_by_rule: dict[str, set[str]] = {}
+    conflict_group_structure_by_rule: dict[str, tuple[tuple[str, ...], int, int, tuple[str, ...], str]] = {}
+    conflict_structure_tokens_by_rule = {
+        rule_id: {
+            f"direct={int(direct_by_rule.get(rule_id, 0))}",
+            f"override={int(override_by_rule.get(rule_id, 0))}",
+            f"subject_scope={_world_rule_subject_scope(subjects_by_rule.get(rule_id, set()), all_subjects)}",
+        }
+        for rule_id in conflict_rule_ids
+    }
+    shared_conflict_structure_token_groups = _group_rule_tokens_by_support(
+        conflict_rule_ids,
+        conflict_structure_tokens_by_rule,
+        {},
+    )
+    conflict_group_partial_structure_tokens_by_rule: dict[str, set[str]] = {}
+    conflict_group_partial_rule_tokens_by_rule: dict[str, set[str]] = {}
 
     all_targets: set[str] = set()
     planned_writes: list[str] = []
     overall_readiness = "ready"
     if review_exemption_rule_ids:
         overall_readiness = "needs-review"
+    if shared_rule_domains or shared_rule_targets:
+        shared_segments = ["shared-world-rule-context"]
+        if shared_rule_domains:
+            shared_segments.append(f"domains={', '.join(sorted(shared_rule_domains))}")
+        if shared_rule_targets:
+            shared_segments.append(f"targets={', '.join(sorted(shared_rule_targets))}")
+        planned_writes.append(" | ".join(shared_segments))
+    conflict_domains = shared_conflict_domains - shared_rule_domains
+    conflict_targets = shared_conflict_targets - shared_rule_targets
+    if conflict_domains or conflict_targets:
+        shared_segments = ["shared-conflict-context"]
+        if conflict_domains:
+            shared_segments.append(f"domains={', '.join(sorted(conflict_domains))}")
+        if conflict_targets:
+            shared_segments.append(f"targets={', '.join(sorted(conflict_targets))}")
+        planned_writes.append(" | ".join(shared_segments))
+    if (
+        shared_conflict_impacts
+        or shared_conflict_direct_impacts
+        or shared_conflict_review_impacts
+        or shared_conflict_write_shapes
+        or shared_conflict_direct_write_shapes
+        or shared_conflict_review_write_shapes
+    ):
+        shared_conflict_impact_union = shared_conflict_direct_impacts | shared_conflict_review_impacts
+        shared_conflict_shape_union = shared_conflict_direct_write_shapes | shared_conflict_review_write_shapes
+        display_shared_conflict_impacts = shared_conflict_impacts - shared_conflict_impact_union
+        display_shared_conflict_write_shapes = shared_conflict_write_shapes - shared_conflict_shape_union
+        shared_segments = ["shared-conflict-actions"]
+        if display_shared_conflict_impacts:
+            shared_segments.append(f"impacts={', '.join(sorted(display_shared_conflict_impacts))}")
+        if shared_conflict_direct_impacts:
+            shared_segments.append(f"direct_impacts={', '.join(sorted(shared_conflict_direct_impacts))}")
+        if shared_conflict_review_impacts:
+            shared_segments.append(f"review_impacts={', '.join(sorted(shared_conflict_review_impacts))}")
+        if display_shared_conflict_write_shapes:
+            shared_segments.append(f"write_shapes={', '.join(sorted(display_shared_conflict_write_shapes))}")
+        if shared_conflict_direct_write_shapes:
+            shared_segments.append(
+                f"direct_write_shapes={', '.join(sorted(shared_conflict_direct_write_shapes))}"
+            )
+        if shared_conflict_review_write_shapes:
+            shared_segments.append(
+                f"review_write_shapes={', '.join(sorted(shared_conflict_review_write_shapes))}"
+            )
+        planned_writes.append(" | ".join(shared_segments))
+    for group_rule_ids, signature in shared_conflict_action_groups:
+        direct_impacts, review_impacts, direct_write_shapes, review_write_shapes = (
+            set(signature[0]),
+            set(signature[1]),
+            set(signature[2]),
+            set(signature[3]),
+        )
+        shared_segments = ["shared-conflict-actions", f"rules={', '.join(group_rule_ids)}"]
+        if direct_impacts:
+            shared_segments.append(f"direct_impacts={', '.join(sorted(direct_impacts))}")
+        if review_impacts:
+            shared_segments.append(f"review_impacts={', '.join(sorted(review_impacts))}")
+        if direct_write_shapes:
+            shared_segments.append(f"direct_write_shapes={', '.join(sorted(direct_write_shapes))}")
+        if review_write_shapes:
+            shared_segments.append(f"review_write_shapes={', '.join(sorted(review_write_shapes))}")
+        planned_writes.append(" | ".join(shared_segments))
+        for rule_id in group_rule_ids:
+            if direct_impacts:
+                conflict_group_direct_impacts_by_rule.setdefault(rule_id, set()).update(direct_impacts)
+            if review_impacts:
+                conflict_group_review_impacts_by_rule.setdefault(rule_id, set()).update(review_impacts)
+            if direct_write_shapes:
+                conflict_group_direct_write_shapes_by_rule.setdefault(rule_id, set()).update(direct_write_shapes)
+            if review_write_shapes:
+                conflict_group_review_write_shapes_by_rule.setdefault(rule_id, set()).update(review_write_shapes)
+    remaining_conflict_direct_write_shapes_by_rule = {
+        rule_id: set(conflict_direct_write_shapes_by_rule.get(rule_id, set()))
+        - conflict_group_direct_write_shapes_by_rule.get(rule_id, set())
+        for rule_id in conflict_rule_ids
+    }
+    remaining_conflict_review_write_shapes_by_rule = {
+        rule_id: set(conflict_review_write_shapes_by_rule.get(rule_id, set()))
+        - conflict_group_review_write_shapes_by_rule.get(rule_id, set())
+        for rule_id in conflict_rule_ids
+    }
+    remaining_conflict_direct_impacts_by_rule = {
+        rule_id: set(conflict_direct_impacts_by_rule.get(rule_id, set()))
+        - conflict_group_direct_impacts_by_rule.get(rule_id, set())
+        for rule_id in conflict_rule_ids
+    }
+    remaining_conflict_review_impacts_by_rule = {
+        rule_id: set(conflict_review_impacts_by_rule.get(rule_id, set()))
+        - conflict_group_review_impacts_by_rule.get(rule_id, set())
+        for rule_id in conflict_rule_ids
+    }
+    shared_conflict_rule_impact_groups = _group_rule_tokens_by_support(
+        conflict_rule_ids,
+        remaining_conflict_direct_impacts_by_rule,
+        remaining_conflict_review_impacts_by_rule,
+    )
+    shared_conflict_write_shape_groups = _group_rule_tokens_by_support(
+        conflict_rule_ids,
+        remaining_conflict_direct_write_shapes_by_rule,
+        remaining_conflict_review_write_shapes_by_rule,
+    )
+    conflict_group_partial_direct_impacts_by_rule: dict[str, set[str]] = {}
+    conflict_group_partial_review_impacts_by_rule: dict[str, set[str]] = {}
+    conflict_group_partial_direct_write_shapes_by_rule: dict[str, set[str]] = {}
+    conflict_group_partial_review_write_shapes_by_rule: dict[str, set[str]] = {}
+    remaining_conflict_domains_by_rule = {
+        rule_id: (set(domains_by_rule.get(rule_id, set())) - shared_rule_domains - conflict_domains)
+        for rule_id in conflict_rule_ids
+    }
+    remaining_conflict_targets_by_rule = {
+        rule_id: (set(targets_by_rule.get(rule_id, set())) - shared_rule_targets - conflict_targets)
+        for rule_id in conflict_rule_ids
+    }
+    shared_conflict_rule_context_groups = _group_rule_tokens_by_support(
+        conflict_rule_ids,
+        remaining_conflict_domains_by_rule,
+        remaining_conflict_targets_by_rule,
+    )
+    conflict_group_partial_domains_by_rule: dict[str, set[str]] = {}
+    conflict_group_partial_targets_by_rule: dict[str, set[str]] = {}
+    for group_rule_ids, signature in shared_conflict_structure_groups:
+        strategies, direct_count, override_count, subjects, subject_scope = signature
+        shared_segments = ["shared-conflict-structure", f"rules={', '.join(group_rule_ids)}"]
+        if strategies:
+            shared_segments.append(f"strategies={', '.join(strategies)}")
+        shared_segments.append(f"direct={direct_count}")
+        shared_segments.append(f"override={override_count}")
+        if subjects:
+            shared_segments.append(f"subjects={', '.join(subjects)}")
+        if subject_scope:
+            shared_segments.append(f"subject_scope={subject_scope}")
+        planned_writes.append(" | ".join(shared_segments))
+        for rule_id in group_rule_ids:
+            conflict_group_structure_by_rule[rule_id] = signature
+    for group_rule_ids, structure_tokens, _ in shared_conflict_structure_token_groups:
+        if not structure_tokens:
+            continue
+        shared_segments = ["shared-conflict-structure-tokens", f"rules={', '.join(group_rule_ids)}"]
+        shared_segments.extend(sorted(structure_tokens))
+        planned_writes.append(" | ".join(shared_segments))
+        for rule_id in group_rule_ids:
+            conflict_group_partial_structure_tokens_by_rule.setdefault(rule_id, set()).update(structure_tokens)
+    remaining_conflict_rule_token_candidates_by_rule = {
+        rule_id: (
+            {
+                f"strategies={', '.join(str(item) for item in strategies_by_rule.get(rule_id, []))}"
+                if strategies_by_rule.get(rule_id)
+                else "",
+                f"subjects={', '.join(sorted(subjects_by_rule.get(rule_id, set())))}"
+                if subjects_by_rule.get(rule_id)
+                else "",
+            }
+            if rule_id not in conflict_group_structure_by_rule
+            else set()
+        )
+        for rule_id in conflict_rule_ids
+    }
+    remaining_conflict_rule_tokens_by_rule = {
+        rule_id: {token for token in tokens if token}
+        for rule_id, tokens in remaining_conflict_rule_token_candidates_by_rule.items()
+    }
+    shared_conflict_rule_token_groups = _group_rule_tokens_by_support(
+        conflict_rule_ids,
+        remaining_conflict_rule_tokens_by_rule,
+        {},
+    )
+    for group_rule_ids, rule_tokens, _ in shared_conflict_rule_token_groups:
+        if not rule_tokens:
+            continue
+        shared_segments = ["shared-conflict-rule-tokens", f"rules={', '.join(group_rule_ids)}"]
+        shared_segments.extend(sorted(rule_tokens))
+        planned_writes.append(" | ".join(shared_segments))
+        for rule_id in group_rule_ids:
+            conflict_group_partial_rule_tokens_by_rule.setdefault(rule_id, set()).update(rule_tokens)
+    for group_rule_ids, direct_impacts, review_impacts in shared_conflict_rule_impact_groups:
+        if not direct_impacts and not review_impacts:
+            continue
+        shared_segments = ["shared-conflict-rule-impacts", f"rules={', '.join(group_rule_ids)}"]
+        if direct_impacts:
+            shared_segments.append(f"direct_impacts={', '.join(sorted(direct_impacts))}")
+        if review_impacts:
+            shared_segments.append(f"review_impacts={', '.join(sorted(review_impacts))}")
+        planned_writes.append(" | ".join(shared_segments))
+        for rule_id in group_rule_ids:
+            if direct_impacts:
+                conflict_group_partial_direct_impacts_by_rule.setdefault(rule_id, set()).update(direct_impacts)
+            if review_impacts:
+                conflict_group_partial_review_impacts_by_rule.setdefault(rule_id, set()).update(review_impacts)
+    for group_rule_ids, context_domains, context_targets in shared_conflict_rule_context_groups:
+        if not context_domains and not context_targets:
+            continue
+        shared_segments = ["shared-conflict-rule-context", f"rules={', '.join(group_rule_ids)}"]
+        if context_domains:
+            shared_segments.append(f"domains={', '.join(sorted(context_domains))}")
+        if context_targets:
+            shared_segments.append(f"targets={', '.join(sorted(context_targets))}")
+        planned_writes.append(" | ".join(shared_segments))
+        for rule_id in group_rule_ids:
+            if context_domains:
+                conflict_group_partial_domains_by_rule.setdefault(rule_id, set()).update(context_domains)
+            if context_targets:
+                conflict_group_partial_targets_by_rule.setdefault(rule_id, set()).update(context_targets)
+    for group_rule_ids, direct_write_shapes, review_write_shapes in shared_conflict_write_shape_groups:
+        shared_segments = ["shared-conflict-write-shapes", f"rules={', '.join(group_rule_ids)}"]
+        if direct_write_shapes:
+            shared_segments.append(f"direct_write_shapes={', '.join(sorted(direct_write_shapes))}")
+        if review_write_shapes:
+            shared_segments.append(f"review_write_shapes={', '.join(sorted(review_write_shapes))}")
+        planned_writes.append(" | ".join(shared_segments))
+        for rule_id in group_rule_ids:
+            if direct_write_shapes:
+                conflict_group_partial_direct_write_shapes_by_rule.setdefault(rule_id, set()).update(direct_write_shapes)
+            if review_write_shapes:
+                conflict_group_partial_review_write_shapes_by_rule.setdefault(rule_id, set()).update(review_write_shapes)
     if shared_exemption_impacts or shared_exemption_write_shapes or shared_exemption_targets or shared_exemption_domains:
         shared_segments = ["shared-exemption-base"]
-        if shared_exemption_domains:
-            shared_segments.append(f"domains={', '.join(sorted(shared_exemption_domains))}")
+        base_domains = shared_exemption_domains - shared_rule_domains
+        base_targets = shared_exemption_targets - shared_rule_targets
+        if base_domains:
+            shared_segments.append(f"domains={', '.join(sorted(base_domains))}")
         if shared_exemption_impacts:
             shared_segments.append(f"impacts={', '.join(sorted(shared_exemption_impacts))}")
         if shared_exemption_write_shapes:
             shared_segments.append(f"write_shapes={', '.join(sorted(shared_exemption_write_shapes))}")
-        if shared_exemption_targets:
-            shared_segments.append(f"targets={', '.join(sorted(shared_exemption_targets))}")
-        planned_writes.append(" | ".join(shared_segments))
+        if base_targets:
+            shared_segments.append(f"targets={', '.join(sorted(base_targets))}")
+        if len(shared_segments) > 1:
+            planned_writes.append(" | ".join(shared_segments))
     if shared_review_impacts or shared_review_write_shapes or shared_review_targets or shared_review_domains:
         shared_segments = ["shared-exemption-review"]
-        if shared_review_domains:
-            shared_segments.append(f"domains={', '.join(sorted(shared_review_domains))}")
+        review_domains = shared_review_domains - shared_rule_domains
+        review_targets = shared_review_targets - shared_rule_targets
+        if review_domains:
+            shared_segments.append(f"domains={', '.join(sorted(review_domains))}")
         if shared_review_impacts:
             shared_segments.append(f"review_impacts={', '.join(sorted(shared_review_impacts))}")
         if shared_review_write_shapes:
             shared_segments.append(f"review_write_shapes={', '.join(sorted(shared_review_write_shapes))}")
-        if shared_review_targets:
-            shared_segments.append(f"targets={', '.join(sorted(shared_review_targets))}")
+        if review_targets:
+            shared_segments.append(f"targets={', '.join(sorted(review_targets))}")
         planned_writes.append(" | ".join(shared_segments))
 
     for rule_id in rule_ids:
         all_targets.update(targets_by_rule.get(rule_id, set()))
         subject_scope = _world_rule_subject_scope(subjects_by_rule.get(rule_id, set()), all_subjects)
+        line_domains = set(domains_by_rule.get(rule_id, set()))
+        line_targets = set(targets_by_rule.get(rule_id, set()))
+        if emit_shared_rule_context:
+            line_domains -= shared_rule_domains
+            line_targets -= shared_rule_targets
         if rule_id in conflict_rule_ids:
-            line = (
-                f"{rule_id}: "
-                f"{', '.join(strategies_by_rule.get(rule_id, [])) or 'review'}"
-                f" | direct={direct_by_rule.get(rule_id, 0)}"
-                f" | override={override_by_rule.get(rule_id, 0)}"
-                f" | subjects={', '.join(sorted(subjects_by_rule.get(rule_id, set())))}"
-                f" | subject_scope={subject_scope}"
-                f" | domains={', '.join(sorted(domains_by_rule.get(rule_id, set())))}"
-                f" | impacts={', '.join(sorted(impacts_by_rule.get(rule_id, set())))}"
-                f" | direct_impacts={', '.join(sorted(direct_impacts_by_rule.get(rule_id, set())))}"
-                f" | review_impacts={', '.join(sorted(review_impacts_by_rule.get(rule_id, set())))}"
-                f" | write_shapes={', '.join(sorted(write_shapes_by_rule.get(rule_id, set())))}"
-                f" | direct_write_shapes={', '.join(sorted(direct_write_shapes_by_rule.get(rule_id, set())))}"
-                f" | review_write_shapes={', '.join(sorted(review_write_shapes_by_rule.get(rule_id, set())))}"
-                f" | targets={', '.join(sorted(targets_by_rule.get(rule_id, set())))}"
+            line_domains -= conflict_domains
+            line_targets -= conflict_targets
+            line_domains -= conflict_group_partial_domains_by_rule.get(rule_id, set())
+            line_targets -= conflict_group_partial_targets_by_rule.get(rule_id, set())
+        if rule_id in conflict_rule_ids:
+            line_impacts = set(impacts_by_rule.get(rule_id, set()))
+            line_direct_impacts = set(direct_impacts_by_rule.get(rule_id, set()))
+            line_review_impacts = set(review_impacts_by_rule.get(rule_id, set()))
+            line_write_shapes = set(write_shapes_by_rule.get(rule_id, set()))
+            line_direct_write_shapes = set(direct_write_shapes_by_rule.get(rule_id, set()))
+            line_review_write_shapes = set(review_write_shapes_by_rule.get(rule_id, set()))
+            line_impacts -= shared_conflict_impacts
+            line_direct_impacts -= shared_conflict_direct_impacts
+            line_review_impacts -= shared_conflict_review_impacts
+            line_write_shapes -= shared_conflict_write_shapes
+            line_direct_write_shapes -= shared_conflict_direct_write_shapes
+            line_review_write_shapes -= shared_conflict_review_write_shapes
+            line_direct_impacts -= conflict_group_direct_impacts_by_rule.get(rule_id, set())
+            line_review_impacts -= conflict_group_review_impacts_by_rule.get(rule_id, set())
+            line_direct_impacts -= conflict_group_partial_direct_impacts_by_rule.get(rule_id, set())
+            line_review_impacts -= conflict_group_partial_review_impacts_by_rule.get(rule_id, set())
+            line_direct_write_shapes -= conflict_group_direct_write_shapes_by_rule.get(rule_id, set())
+            line_review_write_shapes -= conflict_group_review_write_shapes_by_rule.get(rule_id, set())
+            line_impacts -= (
+                conflict_group_direct_impacts_by_rule.get(rule_id, set())
+                | conflict_group_review_impacts_by_rule.get(rule_id, set())
             )
-            planned_writes.append(line)
+            line_impacts -= (
+                conflict_group_partial_direct_impacts_by_rule.get(rule_id, set())
+                | conflict_group_partial_review_impacts_by_rule.get(rule_id, set())
+            )
+            line_write_shapes -= (
+                conflict_group_direct_write_shapes_by_rule.get(rule_id, set())
+                | conflict_group_review_write_shapes_by_rule.get(rule_id, set())
+            )
+            line_direct_write_shapes -= conflict_group_partial_direct_write_shapes_by_rule.get(rule_id, set())
+            line_review_write_shapes -= conflict_group_partial_review_write_shapes_by_rule.get(rule_id, set())
+            line_write_shapes -= (
+                conflict_group_partial_direct_write_shapes_by_rule.get(rule_id, set())
+                | conflict_group_partial_review_write_shapes_by_rule.get(rule_id, set())
+            )
+            structure_signature = conflict_group_structure_by_rule.get(rule_id)
+            shared_structure_tokens = conflict_group_partial_structure_tokens_by_rule.get(rule_id, set())
+            shared_rule_tokens = conflict_group_partial_rule_tokens_by_rule.get(rule_id, set())
+            segments = [f"{rule_id}:"]
+            if structure_signature is None:
+                strategy_token = f"strategies={', '.join(str(item) for item in strategies_by_rule.get(rule_id, []))}"
+                if strategy_token not in shared_rule_tokens:
+                    segments.append(strategy_token if strategies_by_rule.get(rule_id) else "strategies=review")
+                direct_token = f"direct={direct_by_rule.get(rule_id, 0)}"
+                if direct_token not in shared_structure_tokens:
+                    segments.append(direct_token)
+                override_token = f"override={override_by_rule.get(rule_id, 0)}"
+                if override_token not in shared_structure_tokens:
+                    segments.append(override_token)
+                subjects_token = f"subjects={', '.join(sorted(subjects_by_rule.get(rule_id, set())))}"
+                if subjects_token not in shared_rule_tokens:
+                    segments.append(subjects_token)
+                subject_scope_token = f"subject_scope={subject_scope}"
+                if subject_scope_token not in shared_structure_tokens:
+                    segments.append(subject_scope_token)
+            if line_domains:
+                segments.append(f"domains={', '.join(sorted(line_domains))}")
+            if line_impacts:
+                segments.append(f"impacts={', '.join(sorted(line_impacts))}")
+            if line_direct_impacts:
+                segments.append(f"direct_impacts={', '.join(sorted(line_direct_impacts))}")
+            if line_review_impacts:
+                segments.append(f"review_impacts={', '.join(sorted(line_review_impacts))}")
+            if line_write_shapes:
+                segments.append(f"write_shapes={', '.join(sorted(line_write_shapes))}")
+            if line_direct_write_shapes:
+                segments.append(f"direct_write_shapes={', '.join(sorted(line_direct_write_shapes))}")
+            if line_review_write_shapes:
+                segments.append(f"review_write_shapes={', '.join(sorted(line_review_write_shapes))}")
+            if line_targets:
+                segments.append(f"targets={', '.join(sorted(line_targets))}")
+            if len(segments) > 1 or not segments[0].endswith(":"):
+                planned_writes.append(" | ".join(segments))
             overall_readiness = "needs-review"
             continue
 
@@ -752,14 +1181,12 @@ def _constraints_group_explainer(
         exception_scope_bases = exception_scope_bases_by_rule.get(rule_id, set())
         exception_subject_scopes = exception_subject_scopes_by_rule.get(rule_id, set())
         exception_match_modes = exception_match_modes_by_rule.get(rule_id, set())
-        line_domains = set(domains_by_rule.get(rule_id, set()))
         line_impacts = set(impacts_by_rule.get(rule_id, set()))
         line_direct_impacts = set(direct_impacts_by_rule.get(rule_id, set()))
         line_review_impacts = set(review_impacts_by_rule.get(rule_id, set()))
         line_write_shapes = set(write_shapes_by_rule.get(rule_id, set()))
         line_direct_write_shapes = set(direct_write_shapes_by_rule.get(rule_id, set()))
         line_review_write_shapes = set(review_write_shapes_by_rule.get(rule_id, set()))
-        line_targets = set(targets_by_rule.get(rule_id, set()))
         if len(exemption_rule_ids) >= 2:
             line_domains -= shared_exemption_domains
             line_impacts -= shared_exemption_impacts
