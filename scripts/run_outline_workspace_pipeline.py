@@ -17,7 +17,7 @@ def main() -> int:
     parser.add_argument("--workspace", required=True, help="Workspace directory.")
     parser.add_argument(
         "--action",
-        choices=["auto", "validate", "render", "check-consistency", "plan-merge"],
+        choices=["auto", "validate", "render", "check-consistency", "repair-intake", "plan-merge"],
         default="auto",
         help="Action to recommend or execute.",
     )

@@ -5,7 +5,25 @@ from typing import Any
 
 from .consistency import check_idea_consistency, consistency_report_needs_refresh, load_consistency_report
 from .merge import pending_ideas, plan_idea_merge
-from .workspace import collect_workspace_status, render_workspace_views, validate_workspace
+from .workspace import (
+    _format_missing_field_labels,
+    backfill_intake_drafts,
+    collect_workspace_status,
+    inspect_pending_idea_progress,
+    render_workspace_views,
+    validate_workspace,
+)
+
+
+def _repair_intake_reason(idea: dict[str, Any], progress: dict[str, Any]) -> str:
+    title = str(idea.get("title") or progress.get("idea_id") or "pending idea")
+    missing_fields = progress.get("missing_fields", [])
+    if missing_fields:
+        preview = _format_missing_field_labels(missing_fields)
+        return f"当前最早一条 pending idea `{title}` 的 merge plan 还缺 {preview}，先补 intake 信息再继续 merge。"
+    if progress.get("open_questions"):
+        return f"当前最早一条 pending idea `{title}` 仍有待确认问题，先补 intake 信息再继续 merge。"
+    return f"当前最早一条 pending idea `{title}` 还缺可执行信息，先修 intake draft 再继续 merge。"
 
 
 def choose_next_action(workspace: Path) -> dict[str, Any]:
@@ -37,6 +55,15 @@ def choose_next_action(workspace: Path) -> dict[str, Any]:
                 "workspace": str(workspace),
                 "recommended_action": "check-consistency",
                 "reason": "当前最早的 pending idea 存在 consistency 冲突，应该先处理这条 idea 的报告。",
+                "idea_id": target_idea.get("id"),
+                "status": status,
+            }
+        progress = inspect_pending_idea_progress(workspace, target_idea)
+        if progress.get("needs_intake_repair"):
+            return {
+                "workspace": str(workspace),
+                "recommended_action": "repair-intake",
+                "reason": _repair_intake_reason(target_idea, progress),
                 "idea_id": target_idea.get("id"),
                 "status": status,
             }
@@ -106,6 +133,16 @@ def run_outline_workspace_pipeline(
             raise ValueError("check-consistency requires a pending idea.")
         report = check_idea_consistency(workspace, target_idea_id)
         result["executed"] = True
+        result["consistency_report"] = report
+        return result
+
+    if selected_action == "repair-intake":
+        if not target_idea_id:
+            raise ValueError("repair-intake requires a pending idea.")
+        repair = backfill_intake_drafts(workspace, idea_ids=[target_idea_id])
+        report = check_idea_consistency(workspace, target_idea_id)
+        result["executed"] = True
+        result["intake_repair"] = repair
         result["consistency_report"] = report
         return result
 

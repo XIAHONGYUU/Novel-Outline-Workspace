@@ -1,22 +1,21 @@
 # 第一个 Workflow 案例
 
-最后更新：2026-05-22
+最后更新：2026-06-01
 
 ## 案例目标
 
 这个工作区用于记录“第一次按标准 workflow 跑一个新想法”的完整样本。
 
-当前案例刻意停在：
+当前案例已经完成首轮完整闭环：
 
-`ingest -> check-consistency -> plan-merge -> validate`
+`ingest -> check-consistency -> plan-merge -> apply-merge -> validate`
 
 也就是：
 
 - 新想法已经进入 `inbox`
-- intake draft / consistency report / merge plan / HTML views 都已生成
-- 还没有执行 `apply-merge`
-
-这样后续打开这个工作区时，能直接看到一个“可继续并入”的 pending path。
+- intake draft / consistency report / merge plan / HTML views 已生成
+- timeline / outline / canon knowledge-state 已正式写入
+- validator 当前为 `ok=true`
 
 ## 本次使用的想法
 
@@ -65,7 +64,20 @@ python3 scripts/plan_idea_merge.py \
   --json
 ```
 
-5. 校验并刷新状态：
+5. 执行 apply：
+
+```bash
+python3 scripts/apply_idea_merge.py \
+  --workspace ./first-workflow-case \
+  --idea-id idea-20260522-001 \
+  --merge-input-id timeline-merge-001 \
+  --merge-input-id timeline-merge-knowledge-001 \
+  --resolution-note "把林舟在第三章白塔档案室发现密账并入 timeline、outline 与 canon knowledge-state，并将地点人工确认为白塔档案室。" \
+  --location "白塔档案室" \
+  --json
+```
+
+6. 校验并刷新状态：
 
 ```bash
 python3 scripts/validate_workspace.py --workspace ./first-workflow-case --json
@@ -74,16 +86,12 @@ python3 scripts/refresh_workspace_status.py --workspace ./first-workflow-case --
 
 ## 当前结果
 
-- `state/idea-log.json` 中已有 1 条 `pending` idea
+- `state/idea-log.json` 中已有 1 条 `applied` idea
 - consistency gate: `clear`
-- 当前已有 2 条可直接执行的 merge input：
-  - `timeline-merge-001`
-  - `timeline-merge-know-001`
-- validator 当前为 `ok=true`，但仍有 2 条预期内 warning：
-  - `no-events`
-  - `no-scenes`
-
-这是因为本案例故意停在 `plan-merge` 前，不主动 apply。
+- `timeline/events.json` 中已有 1 条正式事件
+- `outline/scene-index.json` 中已有 1 个正式场景
+- `state/canon-index.json` 中已有 1 条正式 knowledge-state
+- validator 当前为 `ok=true`，warning 已清零
 
 ## 关键文件
 
@@ -98,24 +106,19 @@ python3 scripts/refresh_workspace_status.py --workspace ./first-workflow-case --
 
 ## 当前观察
 
-- 这条案例已经证明主链路可以在一个全新工作区里跑通到 `plan-merge`
+- 这条案例现在已经证明：主链路可以在一个全新工作区里完整跑通到 `apply-merge`
 - `plan_idea_merge` 已能同时给出：
   - timeline / outline 的事件与场景并入输入
   - canon knowledge-state 的并入输入
-- 这条案例也保留了一个后续可继续优化的样本：
-  - `location_candidates` 目前抽成了 `的白塔` 与 `白塔`
-  - `knowledge_claims` 当前同时抽到了 `泄密账册`、`议会内部有人泄密`、`密账`
+- 这轮也暴露了两个更关键的真实问题：
+  - `apply_idea_merge.py` 原先没有暴露 knowledge-state CLI 参数，现已补齐；同时也已支持一次性消费多条 `merge_input_id`
+  - `location_candidates` 仍会抽出 `的白塔` 这种弱值，apply 时仍需要人工确认
 
-## 如果继续推进这条案例
+## 当前结论
 
-下一步可直接执行：
+这个案例不再是“可继续并入”的 pending 样本，而是“已完成首轮闭环”的基准样本。  
+后续如果再拿它做验收，重点应从 `plan-merge` 前移到：
 
-```bash
-python3 scripts/apply_idea_merge.py \
-  --workspace ./first-workflow-case \
-  --idea-id idea-20260522-001 \
-  --merge-input-id timeline-merge-001 \
-  --resolution-note "把白塔档案室发现密账并入第三章 timeline / outline。"
-```
-
-然后再补 canon 侧的 `timeline-merge-know-001`，最后重新跑 `validate`。
+- `apply` 的可执行性
+- 状态文件是否一致
+- view / validator / pipeline 推荐动作是否跟正式状态一致

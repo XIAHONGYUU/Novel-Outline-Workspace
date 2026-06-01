@@ -1,3 +1,24 @@
 {
-  "chapters": []
+  "chapters": [
+    {
+      "chapter": 3,
+      "title": "第3章",
+      "summary": "",
+      "scenes": [
+        {
+          "id": "scene-林舟在白塔档案室发现泄密账册",
+          "title": "林舟在白塔档案室发现泄密账册",
+          "pov": "林舟",
+          "status": "planned",
+          "characters": [
+            "char-protagonist"
+          ],
+          "event_ids": [
+            "event-林舟在白塔档案室发现泄密账册"
+          ],
+          "notes": "林舟在第三章的白塔档案室发现密账，由此知道议会内部有人泄密。"
+        }
+      ]
+    }
+  ]
 }

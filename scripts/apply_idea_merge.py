@@ -17,7 +17,12 @@ def main() -> int:
     parser.add_argument("--workspace", required=True, help="Workspace directory.")
     parser.add_argument("--idea-id", required=True, help="Idea id to apply.")
     parser.add_argument("--resolution-note", required=True, help="How this idea was resolved.")
-    parser.add_argument("--merge-input-id", help="Structured merge input id from state/merge-plans/<idea-id>.json.")
+    parser.add_argument(
+        "--merge-input-id",
+        action="append",
+        default=[],
+        help="Repeatable structured merge input id from state/merge-plans/<idea-id>.json.",
+    )
     parser.add_argument("--rule-id", help="Constraint rule id to add or update.")
     parser.add_argument("--rule-type", default="hard-canon", help="Constraint rule type.")
     parser.add_argument("--rule-label", help="Constraint rule label.")
@@ -29,6 +34,23 @@ def main() -> int:
     parser.add_argument("--relationship-reading-chapter", type=int, help="Relationship beat chapter number.")
     parser.add_argument("--relationship-event-id", help="Linked event id for the relationship beat.")
     parser.add_argument("--relationship-notes", help="Extra relationship note stored in canon index.")
+    parser.add_argument("--knowledge-state-id", help="Knowledge-state id to add or update.")
+    parser.add_argument("--knowledge-subject-id", help="Knowledge-state subject character id.")
+    parser.add_argument("--knowledge-subject-name", help="Knowledge-state subject display name.")
+    parser.add_argument("--knowledge-object-key", help="Canonical knowledge object key.")
+    parser.add_argument("--knowledge-object-phrase", help="Original knowledge object phrase.")
+    parser.add_argument("--knowledge-verb", help="Knowledge verb such as 知道 / 发现.")
+    parser.add_argument("--knowledge-reading-chapter", type=int, help="Knowledge-state chapter number.")
+    parser.add_argument("--knowledge-event-id", help="Linked event id for the knowledge-state beat.")
+    parser.add_argument("--knowledge-notes", help="Extra knowledge-state note stored in canon index.")
+    parser.add_argument("--world-rule-exception-id", help="World-rule exception id to add or update.")
+    parser.add_argument("--world-rule-exception-subject-id", help="World-rule exception subject character id.")
+    parser.add_argument("--world-rule-exception-subject-name", help="World-rule exception subject display name.")
+    parser.add_argument("--world-rule-exception-object-key", help="Canonical world-rule exception object key.")
+    parser.add_argument("--world-rule-exception-object-phrase", help="Original world-rule exception object phrase.")
+    parser.add_argument("--world-rule-exception-reading-chapter", type=int, help="World-rule exception chapter number.")
+    parser.add_argument("--world-rule-exception-event-id", help="Linked event id for the world-rule exception beat.")
+    parser.add_argument("--world-rule-exception-notes", help="Extra world-rule exception note stored in canon index.")
     parser.add_argument("--character-id", help="Character id to add or update.")
     parser.add_argument("--character-name", help="Character name to add or update.")
     parser.add_argument("--character-role", default="support", help="Character role.")
@@ -57,7 +79,7 @@ def main() -> int:
         Path(args.workspace),
         idea_id=args.idea_id,
         resolution_note=args.resolution_note,
-        merge_input_id=args.merge_input_id,
+        merge_input_ids=args.merge_input_id,
         override_consistency_gate=args.override_consistency_gate,
         rule_id=args.rule_id,
         rule_type=args.rule_type,
@@ -70,6 +92,23 @@ def main() -> int:
         relationship_reading_chapter=args.relationship_reading_chapter,
         relationship_event_id=args.relationship_event_id,
         relationship_notes=args.relationship_notes,
+        knowledge_state_id=args.knowledge_state_id,
+        knowledge_subject_id=args.knowledge_subject_id,
+        knowledge_subject_name=args.knowledge_subject_name,
+        knowledge_object_key=args.knowledge_object_key,
+        knowledge_object_phrase=args.knowledge_object_phrase,
+        knowledge_verb=args.knowledge_verb,
+        knowledge_reading_chapter=args.knowledge_reading_chapter,
+        knowledge_event_id=args.knowledge_event_id,
+        knowledge_notes=args.knowledge_notes,
+        world_rule_exception_id=args.world_rule_exception_id,
+        world_rule_exception_subject_id=args.world_rule_exception_subject_id,
+        world_rule_exception_subject_name=args.world_rule_exception_subject_name,
+        world_rule_exception_object_key=args.world_rule_exception_object_key,
+        world_rule_exception_object_phrase=args.world_rule_exception_object_phrase,
+        world_rule_exception_reading_chapter=args.world_rule_exception_reading_chapter,
+        world_rule_exception_event_id=args.world_rule_exception_event_id,
+        world_rule_exception_notes=args.world_rule_exception_notes,
         character_id=args.character_id,
         character_name=args.character_name,
         character_role=args.character_role,

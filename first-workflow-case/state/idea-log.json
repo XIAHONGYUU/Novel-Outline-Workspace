@@ -4,7 +4,7 @@
       "id": "idea-20260522-001",
       "title": "林舟在白塔档案室发现泄密账册",
       "kind": "reveal",
-      "status": "pending",
+      "status": "applied",
       "source": "manual",
       "content": "林舟在第三章的白塔档案室发现密账，由此知道议会内部有人泄密。",
       "tags": [
@@ -15,8 +15,10 @@
         "reveal"
       ],
       "target_files": [
+        "canon/characters.md",
         "outline/master-outline.md",
         "outline/scene-index.json",
+        "state/canon-index.json",
         "timeline/events.json"
       ],
       "suggested_domains": [
@@ -26,8 +28,12 @@
       "intake_draft_path": "/home/zuoky/project2/first-workflow-case/state/intake-drafts/idea-20260522-001.json",
       "intake_draft_view_path": "/home/zuoky/project2/first-workflow-case/views/intake-drafts/idea-20260522-001.html",
       "created_at": "2026-05-22T15:38:49Z",
-      "updated_at": "2026-05-22T15:38:49Z",
-      "resolution_note": ""
+      "updated_at": "2026-06-01T12:41:37Z",
+      "resolution_note": "把林舟在第三章白塔档案室发现密账并入 timeline、outline 与 canon knowledge-state，并将地点人工确认为白塔档案室。",
+      "planned_merge_path": "/home/zuoky/project2/first-workflow-case/state/merge-plans/idea-20260522-001.json",
+      "consistency_report_path": null,
+      "consistency_gate_status": "clear",
+      "merge_gate_override": false
     }
   ]
 }

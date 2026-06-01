@@ -664,9 +664,15 @@ constraints grouped summary 还可能再把：
   "consistency_report_path": "/abs/path/to/state/consistency-checks/idea-20260511-001.json",
   "consistency_gate_status": "clear",
   "merge_gate_override": false,
-  "applied_merge_input_id": "timeline-merge-001"
+  "applied_merge_input_id": "timeline-merge-001",
+  "applied_merge_input_ids": ["timeline-merge-001", "timeline-merge-002"]
 }
 ```
+
+其中：
+
+- `applied_merge_input_id` 继续用于“只应用了一条 merge input”的简单情况
+- `applied_merge_input_ids` 用于记录“一次性消费了一组 merge inputs”的情况
 
 ## `state/canon-index.json`
 

@@ -11,7 +11,19 @@
     }
   ],
   "relationships": [],
-  "knowledge_states": [],
+  "knowledge_states": [
+    {
+      "id": "know-char-protagonist-泄密账册-ch3",
+      "subject_id": "char-protagonist",
+      "subject_name": "林舟",
+      "object_key": "泄密账册",
+      "object_phrase": "泄密账册",
+      "verb": "发现",
+      "reading_chapter": 3,
+      "event_id": null,
+      "notes": "林舟在第三章的白塔档案室发现密账，由此知道议会内部有人泄密。"
+    }
+  ],
   "world_rule_exceptions": [],
   "locations": [],
   "factions": [],

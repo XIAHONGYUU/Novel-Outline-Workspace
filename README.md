@@ -32,7 +32,7 @@
 
 ## 当前状态
 
-到 `2026-05-27` 为止，主链路已经推进到：
+到 `2026-06-01` 为止，主链路已经推进到：
 
 `ingest -> check-consistency -> plan-merge -> apply-merge -> validate`
 
@@ -45,7 +45,7 @@
 - gate-aware merge
   `plan_idea_merge` 和 `apply_idea_merge` 都会显式读取 consistency gate
 - timeline merge input layer
-  `plan_idea_merge` 已开始输出结构化 `timeline_merge_inputs`，`apply_idea_merge` 可直接按 `merge_input_id` 消费
+  `plan_idea_merge` 已开始输出结构化 `timeline_merge_inputs`，`apply_idea_merge` 可直接按一条或一组 `merge_input_id` 消费
 - domain-specific plan explainers
   `plan_idea_merge` 的 `proposed_actions` 已开始输出更接近执行层的 domain explainers，而不只是泛化的 domain 提示
 - canon relationship layer
@@ -120,16 +120,16 @@
 - `demo-workspace/`
   作为持续演化的综合示例
 - `first-workflow-case/`
-  作为第一个独立 workflow 案例，当前停在 `clear consistency gate + ready merge plan`
+  作为第一个独立 workflow 案例，现已完成首轮 `ingest -> check-consistency -> plan-merge -> apply-merge -> validate` 闭环
 
 下一步重点不再是补“有没有入口”，而是增强：
 
 - `novel-timeline-merge`
+- `repair-intake -> plan-merge -> apply-merge` 的工作区级集成闭环
+- 更真实的多 merge inputs 组合 apply 覆盖
 - 更细的 timeline-order / knowledge-state 规则
 - 更细的 relationship / world-rule exception 边界
-- 继续扩到更多 object family 的 claim 收敛与 subject-scope 边界
 - grouped summary 与逐条 explainer 的进一步压缩，以及更细的 write-shape token
-- repair / merge explainers 的进一步收敛
 
 ## 核心结构
 
@@ -231,6 +231,17 @@ python3 scripts/apply_idea_merge.py \
   --resolution-note "按 merge input 并入第七章揭露节点。"
 ```
 
+如果同一条 idea 需要同时写入多层，可以重复传入 `--merge-input-id`，一次性消费整组输入：
+
+```bash
+python3 scripts/apply_idea_merge.py \
+  --workspace ./demo-workspace \
+  --idea-id idea-20260511-001 \
+  --merge-input-id timeline-merge-001 \
+  --merge-input-id timeline-merge-knowledge-001 \
+  --resolution-note "一次性并入 timeline / outline / canon。"
+```
+
 对于 `world-rule conflict`，plan 现在可能生成多种结构化输入。
 
 对齐 cutoff：
@@ -298,6 +309,9 @@ python3 scripts/run_outline_workspace_pipeline.py \
   --execute \
   --json
 ```
+
+如果某条 pending idea 的 consistency 是 `warning-only`，但 merge plan 仍缺 `chapter_number` 这类关键字段，
+orchestrator 现在会优先推荐 `repair-intake`，提示先补章节 / 时间节点，再继续 merge。
 
 ## 当前原则
 

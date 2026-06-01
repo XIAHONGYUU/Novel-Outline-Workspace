@@ -68,6 +68,13 @@ SUBJECT_EMBEDDED_NOUN_SUFFIXES = {"城", "桥", "谷", "峰", "巷", "镇", "村
 SUBJECT_EMBEDDED_PREFIX_CHARS = {"在", "于", "入", "到", "从", "向", "朝", "往", "经", "临"}
 SUBJECT_EMBEDDED_ACTION_PREFIXES = {"持", "借", "催动", "施展", "唤出", "唤起", "祭出", "祭起", "使出", "打出", "发动", "催发", "动用", "引动", "操控", "驾驭", "运转"}
 SUBJECT_EMBEDDED_ACTION_TRAILING_CHARS = {"起", "开", "出"}
+SUBJECT_RECIPIENT_PREFIXES = {"告诉", "告知", "提醒", "通知", "叮嘱", "拜托", "问", "询问", "追问"}
+SUBJECT_SOURCE_PREFIX_CHARS = {"从", "由", "经"}
+SUBJECT_SOURCE_SUFFIX_TOKENS = ("那里", "那儿", "这里", "这儿", "那边", "这边", "口中", "口里", "口头", "处")
+SUBJECT_HEARING_SOURCE_PREFIXES = ("听", "听了", "听到", "听过", "听完")
+SUBJECT_HEARING_SOURCE_SUFFIX_TOKENS = ("提", "提起", "提到", "说", "说起", "讲", "讲起")
+SUBJECT_CAUSAL_TRIGGER_PREFIX_CHARS = {"因", "为"}
+SUBJECT_CAUSAL_TRIGGER_SUFFIX_TOKENS = ("一句", "一句话", "一番话", "的话", "提醒", "提点", "点醒")
 SPECULATIVE_EMBEDDED_KNOWLEDGE_PREFIXES = {"怀疑", "猜测", "担心", "听说", "听闻", "据说", "传闻", "觉得", "以为", "误以为"}
 SPECULATIVE_SUBJECT_FILLER_TOKENS = ("那个", "这个", "那名", "这名", "那位", "这位")
 SPECULATIVE_SUBJECT_TIME_FILLER_TOKENS = ("那时", "这时", "此时", "当时", "彼时", "那天", "这天", "当天", "那晚", "当晚", "当夜", "此刻")
@@ -643,6 +650,28 @@ def _looks_like_action_prefixed_embedded_noun(prefix_segment: str, next_segment:
     return False
 
 
+def _looks_like_recipient_object_occurrence(prefix_segment: str) -> bool:
+    return any(prefix_segment.endswith(token) for token in SUBJECT_RECIPIENT_PREFIXES)
+
+
+def _looks_like_source_subject_occurrence(prev_char: str, next_segment: str) -> bool:
+    if prev_char not in SUBJECT_SOURCE_PREFIX_CHARS:
+        return False
+    return any(next_segment.startswith(token) for token in SUBJECT_SOURCE_SUFFIX_TOKENS)
+
+
+def _looks_like_hearing_source_subject_occurrence(prefix_segment: str, next_segment: str) -> bool:
+    if not any(prefix_segment.endswith(token) for token in SUBJECT_HEARING_SOURCE_PREFIXES):
+        return False
+    return any(next_segment.startswith(token) for token in SUBJECT_HEARING_SOURCE_SUFFIX_TOKENS)
+
+
+def _looks_like_causal_trigger_subject_occurrence(prev_char: str, next_segment: str) -> bool:
+    if prev_char not in SUBJECT_CAUSAL_TRIGGER_PREFIX_CHARS:
+        return False
+    return any(next_segment.startswith(token) for token in SUBJECT_CAUSAL_TRIGGER_SUFFIX_TOKENS)
+
+
 def _is_speculative_embedded_knowledge_subject(haystack: str, subject_index: int) -> bool:
     prefix_segment = haystack[max(0, subject_index - 12) : subject_index]
     if any(_is_subject_boundary_char(char) for char in prefix_segment):
@@ -687,6 +716,14 @@ def _looks_like_subject_occurrence(haystack: str, term: str, index: int) -> bool
     if _looks_like_prefixed_embedded_noun(prev_char, next_segment):
         return False
     if _looks_like_action_prefixed_embedded_noun(prefix_segment, next_segment):
+        return False
+    if _looks_like_recipient_object_occurrence(prefix_segment):
+        return False
+    if _looks_like_source_subject_occurrence(prev_char, next_segment):
+        return False
+    if _looks_like_hearing_source_subject_occurrence(prefix_segment, next_segment):
+        return False
+    if _looks_like_causal_trigger_subject_occurrence(prev_char, next_segment):
         return False
     if len(term) > 1:
         return True

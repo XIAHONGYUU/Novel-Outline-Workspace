@@ -3289,6 +3289,46 @@ def _load_merge_input_from_plan(workspace: Path, idea_id: str, merge_input_id: s
     raise ValueError(f"merge input not found for `{idea_id}`: {merge_input_id}")
 
 
+def _load_merge_inputs_from_plan(workspace: Path, idea_id: str, merge_input_ids: list[str]) -> list[dict[str, Any]]:
+    return [_load_merge_input_from_plan(workspace, idea_id, merge_input_id) for merge_input_id in merge_input_ids]
+
+
+def _merge_apply_arg_values(current: Any, incoming: Any, *, key: str, merge_input_ids: list[str]) -> Any:
+    if incoming in (None, "", []):
+        return current
+    if current in (None, "", []):
+        return incoming
+    if isinstance(current, list) and isinstance(incoming, list):
+        merged: list[Any] = []
+        for item in [*current, *incoming]:
+            if item not in merged:
+                merged.append(item)
+        return merged
+    if current == incoming:
+        return current
+    joined_ids = ", ".join(merge_input_ids)
+    raise ValueError(f"merge inputs `{joined_ids}` disagree on apply arg `{key}`.")
+
+
+def _combine_merge_inputs(merge_inputs: list[dict[str, Any]], merge_input_ids: list[str]) -> dict[str, Any]:
+    combined: dict[str, Any] = {}
+    for item in merge_inputs:
+        for key, value in item.get("apply_args", {}).items():
+            combined[key] = _merge_apply_arg_values(
+                combined.get(key),
+                value,
+                key=key,
+                merge_input_ids=merge_input_ids,
+            )
+    resolution_suggestions: list[str] = []
+    for item in merge_inputs:
+        suggestion = str(item.get("resolution_note_suggestion") or "").strip()
+        if suggestion and suggestion not in resolution_suggestions:
+            resolution_suggestions.append(suggestion)
+    combined["_resolution_note_suggestions"] = resolution_suggestions
+    return combined
+
+
 def _coalesce_scalar(explicit: Any, fallback: Any, default_values: tuple[Any, ...] = ()) -> Any:
     if explicit is None:
         return fallback
@@ -3325,12 +3365,40 @@ def _can_merge_input_resolve_blocked_gate(workspace: Path, idea_id: str, merge_i
     return bool(blocking_codes) and blocking_codes.issubset(resolvable_codes)
 
 
+def _can_merge_inputs_resolve_blocked_gate(workspace: Path, idea_id: str, merge_inputs: list[dict[str, Any]]) -> bool:
+    if not merge_inputs:
+        return False
+    report = load_consistency_report(workspace, idea_id) or {}
+    issues = report.get("issues", [])
+    if not issues:
+        return False
+    blocking_codes = {
+        str(issue.get("code") or "")
+        for issue in issues
+        if issue.get("level") == "error" or str(issue.get("code", "")).endswith("-conflict")
+    }
+    if not blocking_codes:
+        return False
+    resolvable_codes: set[str] = set()
+    for merge_input in merge_inputs:
+        if not merge_input or not merge_input.get("resolves_blocked_gate"):
+            continue
+        for code in merge_input.get("resolves_issue_codes", []):
+            token = str(code or "").strip()
+            if token:
+                resolvable_codes.add(token)
+        if not merge_input.get("resolves_issue_codes") and merge_input.get("source_issue_code"):
+            resolvable_codes.add(str(merge_input.get("source_issue_code")))
+    return bool(resolvable_codes) and blocking_codes.issubset(resolvable_codes)
+
+
 def apply_idea_merge(
     workspace: Path,
     *,
     idea_id: str,
     resolution_note: str,
     merge_input_id: str | None = None,
+    merge_input_ids: list[str] | None = None,
     override_consistency_gate: bool = False,
     rule_id: str | None = None,
     rule_type: str = "hard-canon",
@@ -3386,10 +3454,30 @@ def apply_idea_merge(
     workspace = workspace.expanduser().resolve()
     idea_log, idea, idea_index = _find_idea(workspace, idea_id)
     gate = _consistency_gate(workspace, idea)
-    merge_input = _load_merge_input_from_plan(workspace, idea_id, merge_input_id) if merge_input_id else {}
-    if not gate["can_apply_merge"] and not override_consistency_gate and not _can_merge_input_resolve_blocked_gate(workspace, idea_id, merge_input):
+    requested_merge_input_ids: list[str] = []
+    for token in [*(merge_input_ids or []), merge_input_id]:
+        normalized = str(token or "").strip()
+        if normalized and normalized not in requested_merge_input_ids:
+            requested_merge_input_ids.append(normalized)
+
+    merge_inputs = _load_merge_inputs_from_plan(workspace, idea_id, requested_merge_input_ids) if requested_merge_input_ids else []
+    merge_input = merge_inputs[0] if len(merge_inputs) == 1 else {}
+    combined_merge_apply_args = (
+        _combine_merge_inputs(merge_inputs, requested_merge_input_ids) if merge_inputs else {}
+    )
+    if (
+        not gate["can_apply_merge"]
+        and not override_consistency_gate
+        and not _can_merge_input_resolve_blocked_gate(workspace, idea_id, merge_input)
+        and not _can_merge_inputs_resolve_blocked_gate(workspace, idea_id, merge_inputs)
+    ):
         raise ValueError(f"consistency gate blocked for `{idea_id}`: {gate['summary']}")
-    merge_apply_args = merge_input.get("apply_args", {}) if isinstance(merge_input, dict) else {}
+    merge_apply_args = {
+        key: value
+        for key, value in combined_merge_apply_args.items()
+        if not str(key).startswith("_")
+    }
+    resolution_note_suggestions = combined_merge_apply_args.get("_resolution_note_suggestions", [])
 
     rule_id = _coalesce_scalar(rule_id, merge_apply_args.get("rule_id"))
     rule_type = _coalesce_scalar(rule_type, merge_apply_args.get("rule_type"), ("hard-canon",))
@@ -3439,8 +3527,9 @@ def apply_idea_merge(
     scene_character_ids = _coalesce_list(scene_character_ids, merge_apply_args.get("scene_character_ids"))
     scene_event_ids = _coalesce_list(scene_event_ids, merge_apply_args.get("scene_event_ids"))
     scene_notes = _coalesce_scalar(scene_notes, merge_apply_args.get("scene_notes"))
-    canon_note = _coalesce_scalar(canon_note, merge_input.get("resolution_note_suggestion"))
-    outline_note = _coalesce_scalar(outline_note, merge_input.get("resolution_note_suggestion"))
+    note_suggestion = resolution_note_suggestions[0] if resolution_note_suggestions else merge_input.get("resolution_note_suggestion")
+    canon_note = _coalesce_scalar(canon_note, note_suggestion)
+    outline_note = _coalesce_scalar(outline_note, note_suggestion)
 
     updated_files: set[str] = set()
 
@@ -3639,8 +3728,12 @@ def apply_idea_merge(
     idea["consistency_report_path"] = gate.get("report_path")
     idea["consistency_gate_status"] = gate.get("status")
     idea["merge_gate_override"] = bool(override_consistency_gate)
-    if merge_input_id:
-        idea["applied_merge_input_id"] = merge_input_id
+    if requested_merge_input_ids:
+        idea["applied_merge_input_ids"] = requested_merge_input_ids
+        if len(requested_merge_input_ids) == 1:
+            idea["applied_merge_input_id"] = requested_merge_input_ids[0]
+        else:
+            idea.pop("applied_merge_input_id", None)
     idea_log["ideas"][idea_index] = idea
     write_json(workspace / "state/idea-log.json", idea_log)
 

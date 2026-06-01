@@ -404,7 +404,7 @@
         <div class="hero-copy">
           <div class="eyebrow">Novel Outline Workspace</div>
           <h1>白塔疑案</h1>
-          <p>当前最重要的是处理 merge 队列，把零散 idea 尽快转成正式 canon、timeline 和 scene。</p>
+          <p>工作区已经进入稳定推进状态，适合继续扩写章节、补场景和做更细的冲突校验。</p>
           <nav>
             <a href="index.html">总览</a>
             <a href="validation-report.html">校验报告</a>
@@ -416,20 +416,20 @@
           <div class="rail-card">
             <div class="eyebrow">Workspace Mode</div>
             <strong>extend-existing</strong>
-            <span class="badge warning">Pending Ideas</span>
+            <span class="badge ok">Stable Working State</span>
           </div>
           <div class="rail-card">
             <div class="eyebrow">Protagonist</div>
             <strong>林舟</strong>
-            <span class="submetric">updated at 2026-05-22T15:38:49Z</span>
+            <span class="submetric">updated at 2026-06-01T12:41:51Z</span>
           </div>
         </div>
       </div>
       <div class="story-stats">
-        <article class="stat-card"><div class="eyebrow">Idea Pool</div><div class="metric">1</div><div class="submetric">pending 1 / applied 0</div></article>
+        <article class="stat-card"><div class="eyebrow">Idea Pool</div><div class="metric">1</div><div class="submetric">pending 0 / applied 1</div></article>
         <article class="stat-card"><div class="eyebrow">Characters</div><div class="metric">1</div><div class="submetric">正式角色索引</div></article>
-        <article class="stat-card"><div class="eyebrow">Events</div><div class="metric">0</div><div class="submetric">真实时间线节点</div></article>
-        <article class="stat-card"><div class="eyebrow">Scenes</div><div class="metric">0</div><div class="submetric">正式场景节点</div></article>
+        <article class="stat-card"><div class="eyebrow">Events</div><div class="metric">1</div><div class="submetric">真实时间线节点</div></article>
+        <article class="stat-card"><div class="eyebrow">Scenes</div><div class="metric">1</div><div class="submetric">正式场景节点</div></article>
       </div>
     </header>
     <section class="layout">
@@ -440,7 +440,7 @@
               <div class="eyebrow">Command Desk</div>
               <h2>下一步应该做什么</h2>
             </div>
-            <span class="badge warning">extend-existing</span>
+            <span class="badge ok">extend-existing</span>
           </div>
           <div class="action-grid">
             <a class="action-card" href="validation-report.html">
@@ -464,7 +464,7 @@
               <span>直接回到 JSON 真相源确认 mode、counts 和最新校验时间。</span>
             </a>
           </div>
-          <p class="submetric" style="margin-top: 16px;">优先处理 pending ideas，并把确认内容并入 canon / outline / timeline。</p>
+          <p class="submetric" style="margin-top: 16px;">继续扩充正式大纲，并在每轮改动后运行 validator。</p>
         </article>
         <article class="panel">
           <div class="section-head">
@@ -472,18 +472,9 @@
               <div class="eyebrow">Merge Desk</div>
               <h2>Pending Ideas</h2>
             </div>
-            <span class="badge warning">1 waiting</span>
+            <span class="badge ok">0 waiting</span>
           </div>
-          <div class="list-card">
-        <div class="list-row">
-          <strong>林舟在白塔档案室发现泄密账册</strong>
-          <div>林舟在第三章的白塔档案室发现密账，由此知道议会内部有人泄密。</div>
-          <div class="meta">
-            <span class="badge warning">reveal</span>
-            <code>idea-20260522-001</code>
-          </div>
-        </div>
-        </div>
+          <div class="list-card"><div class="empty">当前没有 pending ideas，merge 队列是空的。</div></div>
         </article>
         <article class="panel">
           <div class="section-head">
@@ -496,11 +487,29 @@
           <div class="grid" style="margin-top: 0;">
             <div class="panel strong">
               <h3>Recent Events</h3>
-              <div class="list-card"><div class="empty">还没有正式事件。时间线页目前会保持空白。</div></div>
+              <div class="list-card">
+        <div class="list-row">
+          <strong>林舟在白塔档案室发现泄密账册</strong>
+          <div class="meta">
+            <span class="badge soft">chronological #3</span>
+            <span class="badge soft">chapter 3</span>
+            <code>白塔档案室</code>
+          </div>
+        </div>
+        </div>
             </div>
             <div class="panel strong">
               <h3>Chapter Snapshot</h3>
-              <div class="chapter-strip"><div class="empty">还没有章节卡片。先补 `outline/scene-index.json`。</div></div>
+              <div class="chapter-strip">
+        <div class="chapter-card">
+          <strong>第 3 章</strong>
+          <div class="meta">
+            <span class="badge soft">1 scenes</span>
+            <span class="badge soft">第3章</span>
+          </div>
+          <p>当前还没有章节摘要。</p>
+        </div>
+        </div>
             </div>
           </div>
         </article>
@@ -520,18 +529,18 @@
               <div class="progress-bar"><div class="progress-fill" style="width: 100%;"></div></div>
             </div>
             <div class="progress-row">
-              <div class="progress-label"><span>Structure Coverage</span><span>0%</span></div>
-              <div class="progress-bar"><div class="progress-fill" style="width: 0%;"></div></div>
+              <div class="progress-label"><span>Structure Coverage</span><span>16%</span></div>
+              <div class="progress-bar"><div class="progress-fill" style="width: 16%;"></div></div>
             </div>
             <div class="progress-row">
-              <div class="progress-label"><span>Merge Queue Health</span><span>0%</span></div>
-              <div class="progress-bar"><div class="progress-fill" style="width: 0%;"></div></div>
+              <div class="progress-label"><span>Merge Queue Health</span><span>100%</span></div>
+              <div class="progress-bar"><div class="progress-fill" style="width: 100%;"></div></div>
             </div>
           </div>
           <div class="meta" style="margin-top: 14px;">
             <span class="badge ok">errors 0</span>
-            <span class="badge warning">warnings 2</span>
-            <span class="badge soft">applied 0</span>
+            <span class="badge ok">warnings 0</span>
+            <span class="badge soft">applied 1</span>
           </div>
         </article>
         <article class="panel">
@@ -567,7 +576,7 @@
           <div>canon / outline / timeline</div>
           <div class="meta">
             <code>idea-20260522-001</code>
-            <span class="badge soft">2026-05-22T15:38:49Z</span>
+            <span class="badge soft">2026-06-01T12:39:21Z</span>
           </div>
         </div>
         </div>
@@ -633,9 +642,9 @@
               <h2>校验摘要</h2>
             </div>
           </div>
-          <p>validated_at: <code>2026-05-22T15:38:49Z</code></p>
+          <p>validated_at: <code>2026-06-01T12:41:37Z</code></p>
           <p>report_path: <code>/home/zuoky/project2/first-workflow-case/views/validation-report.html</code></p>
-          <p class="submetric">优先处理 pending ideas，并把确认内容并入 canon / outline / timeline。</p>
+          <p class="submetric">继续扩充正式大纲，并在每轮改动后运行 validator。</p>
         </article>
       </div>
     </section>

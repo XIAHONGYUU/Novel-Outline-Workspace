@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -292,6 +293,133 @@ class WorkspaceTests(unittest.TestCase):
             self.assertTrue(any(chapter["chapter"] == 3 for chapter in scene_index["chapters"]))
             events = read_json(workspace / "timeline/events.json", {"events": []})["events"]
             self.assertTrue(any(event["label"] == "白塔夜审" for event in events))
+
+    def test_apply_merge_cli_accepts_knowledge_state_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            result = ingest_idea(
+                workspace,
+                title="白塔夜审",
+                content="林舟在第三章白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+                kind="reveal",
+            )
+            idea_id = result["idea"]["id"]
+            report = check_idea_consistency(workspace, idea_id)
+            self.assertTrue(report["ok"])
+            plan = plan_idea_merge(workspace, idea_id)
+            event_input = next(item for item in plan["timeline_merge_inputs"] if item["strategy"] == "create-event-and-scene")
+            knowledge_input = next(item for item in plan["timeline_merge_inputs"] if item["strategy"] == "upsert-canon-knowledge-state")
+
+            command = [
+                sys.executable,
+                "scripts/apply_idea_merge.py",
+                "--workspace",
+                str(workspace),
+                "--idea-id",
+                idea_id,
+                "--resolution-note",
+                "一次性并入 timeline 与 knowledge-state。",
+                "--event-id",
+                str(event_input["apply_args"]["event_id"]),
+                "--event-label",
+                str(event_input["apply_args"]["event_label"]),
+                "--chronological-index",
+                str(event_input["apply_args"]["chronological_index"]),
+                "--reading-chapter",
+                str(event_input["apply_args"]["reading_chapter"]),
+                "--location",
+                str(event_input["apply_args"]["location"]),
+                "--participant-id",
+                "char-protagonist",
+                "--chapter-number",
+                str(event_input["apply_args"]["chapter_number"]),
+                "--scene-id",
+                str(event_input["apply_args"]["scene_id"]),
+                "--scene-title",
+                str(event_input["apply_args"]["scene_title"]),
+                "--scene-pov",
+                str(event_input["apply_args"]["scene_pov"]),
+                "--scene-status",
+                str(event_input["apply_args"]["scene_status"]),
+                "--scene-character-id",
+                "char-protagonist",
+                "--scene-event-id",
+                str(event_input["apply_args"]["event_id"]),
+                "--knowledge-state-id",
+                str(knowledge_input["apply_args"]["knowledge_state_id"]),
+                "--knowledge-subject-id",
+                str(knowledge_input["apply_args"]["knowledge_subject_id"]),
+                "--knowledge-subject-name",
+                str(knowledge_input["apply_args"]["knowledge_subject_name"]),
+                "--knowledge-object-key",
+                str(knowledge_input["apply_args"]["knowledge_object_key"]),
+                "--knowledge-object-phrase",
+                str(knowledge_input["apply_args"]["knowledge_object_phrase"]),
+                "--knowledge-verb",
+                str(knowledge_input["apply_args"]["knowledge_verb"]),
+                "--knowledge-reading-chapter",
+                str(knowledge_input["apply_args"]["knowledge_reading_chapter"]),
+                "--json",
+            ]
+            completed = subprocess.run(
+                command,
+                cwd=REPO_ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn('"status": "applied"', completed.stdout)
+            canon_index = read_json(workspace / "state/canon-index.json", {})
+            self.assertTrue(canon_index["knowledge_states"])
+
+    def test_apply_merge_cli_can_consume_multiple_merge_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            result = ingest_idea(
+                workspace,
+                title="白塔夜审",
+                content="林舟在第三章白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+                kind="reveal",
+            )
+            idea_id = result["idea"]["id"]
+            report = check_idea_consistency(workspace, idea_id)
+            self.assertTrue(report["ok"])
+            plan = plan_idea_merge(workspace, idea_id)
+            event_input = next(item for item in plan["timeline_merge_inputs"] if item["strategy"] == "create-event-and-scene")
+            knowledge_input = next(item for item in plan["timeline_merge_inputs"] if item["strategy"] == "upsert-canon-knowledge-state")
+
+            command = [
+                sys.executable,
+                "scripts/apply_idea_merge.py",
+                "--workspace",
+                str(workspace),
+                "--idea-id",
+                idea_id,
+                "--resolution-note",
+                "按两条 merge input 一次性并入。",
+                "--merge-input-id",
+                str(event_input["id"]),
+                "--merge-input-id",
+                str(knowledge_input["id"]),
+                "--json",
+            ]
+            completed = subprocess.run(
+                command,
+                cwd=REPO_ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn('"status": "applied"', completed.stdout)
+            idea_log = read_json(workspace / "state/idea-log.json", {"ideas": []})
+            idea = next(item for item in idea_log["ideas"] if item["id"] == idea_id)
+            self.assertEqual(idea["applied_merge_input_ids"], [event_input["id"], knowledge_input["id"]])
+            scene_index = read_json(workspace / "outline/scene-index.json", {"chapters": []})
+            self.assertTrue(any(chapter["chapter"] == 3 for chapter in scene_index["chapters"]))
+            canon_index = read_json(workspace / "state/canon-index.json", {})
+            self.assertTrue(canon_index["knowledge_states"])
 
     def test_relationship_merge_input_updates_canon_relationships(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2734,6 +2862,37 @@ class WorkspaceTests(unittest.TestCase):
             pipeline = run_outline_workspace_pipeline(workspace)
             self.assertEqual(pipeline["recommended_action"], "plan-merge")
             self.assertEqual(pipeline["idea_id"], idea_id)
+
+    def test_status_and_orchestrator_surface_missing_merge_info(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            result = ingest_idea(
+                workspace,
+                title="师徒关系裂缝",
+                content="师姐在白塔议事厅确认林舟可能不会继续站在议会一边",
+                kind="character",
+            )
+            idea_id = result["idea"]["id"]
+            report = check_idea_consistency(workspace, idea_id)
+            self.assertTrue(report["ok"])
+
+            plan = plan_idea_merge(workspace, idea_id)
+            self.assertIn("chapter_number", plan["timeline_merge_inputs"][0]["missing_fields"])
+
+            status = collect_workspace_status(workspace)
+            self.assertIn("章节号", status["recommended_next_step"])
+            self.assertIn("师徒关系裂缝", status["recommended_next_step"])
+
+            pipeline = run_outline_workspace_pipeline(workspace)
+            self.assertEqual(pipeline["recommended_action"], "repair-intake")
+            self.assertEqual(pipeline["idea_id"], idea_id)
+            self.assertIn("章节号", pipeline["reason"])
+
+            executed = run_outline_workspace_pipeline(workspace, action="repair-intake", execute=True, idea_id=idea_id)
+            self.assertTrue(executed["executed"])
+            self.assertEqual(executed["consistency_report"]["idea_id"], idea_id)
+            self.assertEqual(executed["intake_repair"]["repaired_count"], 1)
 
     def test_idea_intake_infers_kind_tags_and_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5939,6 +6098,356 @@ class WorkspaceTests(unittest.TestCase):
             world_rule_issues = [issue for issue in report["issues"] if issue["code"] == "world-rule-conflict"]
             self.assertEqual(len(world_rule_issues), 1)
             self.assertEqual(world_rule_issues[0]["details"]["rule_id"], "rule-002")
+
+    def test_consistency_check_treats_message_recipient_before_knowledge_verb_as_shared_subject(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            canon_index = read_json(workspace / "state/canon-index.json", {})
+            canon_index["characters"].append(
+                {
+                    "id": "char-sulan",
+                    "name": "苏岚",
+                    "aliases": [],
+                    "role": "deuteragonist",
+                    "status": "alive",
+                    "death_event_id": None,
+                }
+            )
+            canon_index["world_rule_exceptions"] = [
+                {
+                    "id": "rulex-rule-001-linzhou-identity-ch7",
+                    "rule_id": "rule-001",
+                    "rule_label": "林舟在首领身份正式揭露前不知道组织首领身份",
+                    "subject_id": "char-protagonist",
+                    "subject_name": "林舟",
+                    "object_key": "组织首领身份",
+                    "object_phrase": "组织首领身份",
+                    "reading_chapter": 7,
+                    "event_id": None,
+                    "notes": "本章正式例外。",
+                }
+            ]
+            write_json(workspace / "state/canon-index.json", canon_index)
+            write_json(
+                workspace / "timeline/events.json",
+                {
+                    "events": [
+                        {
+                            "id": "event-010",
+                            "label": "首领身份正式揭露",
+                            "chronological_index": 10,
+                            "reading_chapter": 10,
+                            "participants": ["char-protagonist", "char-sulan"],
+                            "location": "主城",
+                            "notes": "",
+                        }
+                    ]
+                },
+            )
+            write_json(
+                workspace / "constraints/constraints.json",
+                {
+                    "rules": [
+                        {
+                            "id": "rule-001",
+                            "type": "hard-canon",
+                            "label": "林舟在首领身份正式揭露前不知道组织首领身份",
+                            "applies_until_event_id": "event-010",
+                            "notes": "",
+                        }
+                    ]
+                },
+            )
+            result = ingest_idea(
+                workspace,
+                title="",
+                content="林舟在第七章告诉苏岚自己知道组织首领是谁。",
+                kind="reveal",
+            )
+            idea_id = result["idea"]["id"]
+            draft_path = workspace / "state" / "intake-drafts" / f"{idea_id}.json"
+            draft = read_json(draft_path, {})
+            draft["character_mentions"] = ["林舟", "苏岚"]
+            draft["chapter_hints"] = [7]
+            write_json(draft_path, draft)
+
+            report = check_idea_consistency(workspace, idea_id)
+            self.assertEqual(
+                [(claim["subject_name"], claim["object_key"]) for claim in report["knowledge_claims"]],
+                [("林舟", "组织首领是谁")],
+            )
+            exemption = next(item for item in report["exemptions"] if item["code"] == "world-rule-exemption-applied")
+            self.assertEqual(exemption["details"]["exception_scope"], "same-chapter-shared-subject-claim-match")
+
+            plan = plan_idea_merge(workspace, idea_id)
+            constraints_action = next(
+                action
+                for action in plan["proposed_actions"]
+                if action["domain"] == "constraints" and "已有正式 exception" in action["summary"]
+            )
+            summary_text = " ".join(constraints_action["planned_writes"])
+            self.assertIn("exception_scope=same-chapter-shared-subject-claim-match", summary_text)
+            self.assertNotIn("constraints:review-subject-scope", summary_text)
+            self.assertIn("direct=1", summary_text)
+            self.assertIn("review=0", summary_text)
+            self.assertEqual(constraints_action["readiness"], "ready")
+
+    def test_consistency_check_treats_source_subject_before_knowledge_verb_as_shared_subject(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            canon_index = read_json(workspace / "state/canon-index.json", {})
+            canon_index["characters"].append(
+                {
+                    "id": "char-sulan",
+                    "name": "苏岚",
+                    "aliases": [],
+                    "role": "deuteragonist",
+                    "status": "alive",
+                    "death_event_id": None,
+                }
+            )
+            canon_index["world_rule_exceptions"] = [
+                {
+                    "id": "rulex-rule-001-linzhou-identity-ch7",
+                    "rule_id": "rule-001",
+                    "rule_label": "林舟在首领身份正式揭露前不知道组织首领身份",
+                    "subject_id": "char-protagonist",
+                    "subject_name": "林舟",
+                    "object_key": "组织首领身份",
+                    "object_phrase": "组织首领身份",
+                    "reading_chapter": 7,
+                    "event_id": None,
+                    "notes": "本章正式例外。",
+                }
+            ]
+            write_json(workspace / "state/canon-index.json", canon_index)
+            write_json(
+                workspace / "timeline/events.json",
+                {
+                    "events": [
+                        {
+                            "id": "event-010",
+                            "label": "首领身份正式揭露",
+                            "chronological_index": 10,
+                            "reading_chapter": 10,
+                            "participants": ["char-protagonist", "char-sulan"],
+                            "location": "主城",
+                            "notes": "",
+                        }
+                    ]
+                },
+            )
+            write_json(
+                workspace / "constraints/constraints.json",
+                {
+                    "rules": [
+                        {
+                            "id": "rule-001",
+                            "type": "hard-canon",
+                            "label": "林舟在首领身份正式揭露前不知道组织首领身份",
+                            "applies_until_event_id": "event-010",
+                            "notes": "",
+                        }
+                    ]
+                },
+            )
+            result = ingest_idea(
+                workspace,
+                title="",
+                content="林舟在第七章从苏岚那里知道组织首领是谁。",
+                kind="reveal",
+            )
+            idea_id = result["idea"]["id"]
+            draft_path = workspace / "state" / "intake-drafts" / f"{idea_id}.json"
+            draft = read_json(draft_path, {})
+            draft["character_mentions"] = ["林舟", "苏岚"]
+            draft["chapter_hints"] = [7]
+            write_json(draft_path, draft)
+
+            report = check_idea_consistency(workspace, idea_id)
+            self.assertEqual(
+                [(claim["subject_name"], claim["object_key"]) for claim in report["knowledge_claims"]],
+                [("林舟", "组织首领是谁")],
+            )
+            exemption = next(item for item in report["exemptions"] if item["code"] == "world-rule-exemption-applied")
+            self.assertEqual(exemption["details"]["exception_scope"], "same-chapter-shared-subject-claim-match")
+
+            plan = plan_idea_merge(workspace, idea_id)
+            constraints_action = next(
+                action
+                for action in plan["proposed_actions"]
+                if action["domain"] == "constraints" and "已有正式 exception" in action["summary"]
+            )
+            summary_text = " ".join(constraints_action["planned_writes"])
+            self.assertIn("exception_scope=same-chapter-shared-subject-claim-match", summary_text)
+            self.assertNotIn("constraints:review-subject-scope", summary_text)
+            self.assertIn("direct=1", summary_text)
+            self.assertIn("review=0", summary_text)
+            self.assertEqual(constraints_action["readiness"], "ready")
+
+    def test_consistency_check_treats_hearing_source_before_knowledge_verb_as_shared_subject(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            canon_index = read_json(workspace / "state/canon-index.json", {})
+            canon_index["characters"].append(
+                {
+                    "id": "char-sulan",
+                    "name": "苏岚",
+                    "aliases": [],
+                    "role": "deuteragonist",
+                    "status": "alive",
+                    "death_event_id": None,
+                }
+            )
+            canon_index["world_rule_exceptions"] = [
+                {
+                    "id": "rulex-rule-001-linzhou-identity-ch7",
+                    "rule_id": "rule-001",
+                    "rule_label": "林舟在首领身份正式揭露前不知道组织首领身份",
+                    "subject_id": "char-protagonist",
+                    "subject_name": "林舟",
+                    "object_key": "组织首领身份",
+                    "object_phrase": "组织首领身份",
+                    "reading_chapter": 7,
+                    "event_id": None,
+                    "notes": "本章正式例外。",
+                }
+            ]
+            write_json(workspace / "state/canon-index.json", canon_index)
+            write_json(
+                workspace / "timeline/events.json",
+                {
+                    "events": [
+                        {
+                            "id": "event-010",
+                            "label": "首领身份正式揭露",
+                            "chronological_index": 10,
+                            "reading_chapter": 10,
+                            "participants": ["char-protagonist", "char-sulan"],
+                            "location": "主城",
+                            "notes": "",
+                        }
+                    ]
+                },
+            )
+            write_json(
+                workspace / "constraints/constraints.json",
+                {
+                    "rules": [
+                        {
+                            "id": "rule-001",
+                            "type": "hard-canon",
+                            "label": "林舟在首领身份正式揭露前不知道组织首领身份",
+                            "applies_until_event_id": "event-010",
+                            "notes": "",
+                        }
+                    ]
+                },
+            )
+            result = ingest_idea(
+                workspace,
+                title="",
+                content="林舟在第七章听苏岚提起后知道组织首领是谁。",
+                kind="reveal",
+            )
+            idea_id = result["idea"]["id"]
+            draft_path = workspace / "state" / "intake-drafts" / f"{idea_id}.json"
+            draft = read_json(draft_path, {})
+            draft["character_mentions"] = ["林舟", "苏岚"]
+            draft["chapter_hints"] = [7]
+            write_json(draft_path, draft)
+
+            report = check_idea_consistency(workspace, idea_id)
+            self.assertEqual(
+                [(claim["subject_name"], claim["object_key"]) for claim in report["knowledge_claims"]],
+                [("林舟", "组织首领是谁")],
+            )
+            exemption = next(item for item in report["exemptions"] if item["code"] == "world-rule-exemption-applied")
+            self.assertEqual(exemption["details"]["exception_scope"], "same-chapter-shared-subject-claim-match")
+
+    def test_consistency_check_treats_causal_trigger_subject_before_knowledge_verb_as_shared_subject(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            canon_index = read_json(workspace / "state/canon-index.json", {})
+            canon_index["characters"].append(
+                {
+                    "id": "char-sulan",
+                    "name": "苏岚",
+                    "aliases": [],
+                    "role": "deuteragonist",
+                    "status": "alive",
+                    "death_event_id": None,
+                }
+            )
+            canon_index["world_rule_exceptions"] = [
+                {
+                    "id": "rulex-rule-001-linzhou-identity-ch7",
+                    "rule_id": "rule-001",
+                    "rule_label": "林舟在首领身份正式揭露前不知道组织首领身份",
+                    "subject_id": "char-protagonist",
+                    "subject_name": "林舟",
+                    "object_key": "组织首领身份",
+                    "object_phrase": "组织首领身份",
+                    "reading_chapter": 7,
+                    "event_id": None,
+                    "notes": "本章正式例外。",
+                }
+            ]
+            write_json(workspace / "state/canon-index.json", canon_index)
+            write_json(
+                workspace / "timeline/events.json",
+                {
+                    "events": [
+                        {
+                            "id": "event-010",
+                            "label": "首领身份正式揭露",
+                            "chronological_index": 10,
+                            "reading_chapter": 10,
+                            "participants": ["char-protagonist", "char-sulan"],
+                            "location": "主城",
+                            "notes": "",
+                        }
+                    ]
+                },
+            )
+            write_json(
+                workspace / "constraints/constraints.json",
+                {
+                    "rules": [
+                        {
+                            "id": "rule-001",
+                            "type": "hard-canon",
+                            "label": "林舟在首领身份正式揭露前不知道组织首领身份",
+                            "applies_until_event_id": "event-010",
+                            "notes": "",
+                        }
+                    ]
+                },
+            )
+            result = ingest_idea(
+                workspace,
+                title="",
+                content="林舟在第七章因苏岚一句话才知道组织首领是谁。",
+                kind="reveal",
+            )
+            idea_id = result["idea"]["id"]
+            draft_path = workspace / "state" / "intake-drafts" / f"{idea_id}.json"
+            draft = read_json(draft_path, {})
+            draft["character_mentions"] = ["林舟", "苏岚"]
+            draft["chapter_hints"] = [7]
+            write_json(draft_path, draft)
+
+            report = check_idea_consistency(workspace, idea_id)
+            self.assertEqual(
+                [(claim["subject_name"], claim["object_key"]) for claim in report["knowledge_claims"]],
+                [("林舟", "组织首领是谁")],
+            )
+            exemption = next(item for item in report["exemptions"] if item["code"] == "world-rule-exemption-applied")
+            self.assertEqual(exemption["details"]["exception_scope"], "same-chapter-shared-subject-claim-match")
 
     def test_consistency_check_does_not_turn_speculative_other_subject_knowledge_clause_into_direct_conflict(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -5,14 +5,14 @@
   "workspace_mode": "extend-existing",
   "idea_counts": {
     "total": 1,
-    "pending": 1,
-    "applied": 0,
+    "pending": 0,
+    "applied": 1,
     "rejected": 0
   },
   "entity_counts": {
     "characters": 1,
-    "events": 0,
-    "scenes": 0
+    "events": 1,
+    "scenes": 1
   },
   "core_files": {
     "state/canon-index.json": true,
@@ -29,10 +29,10 @@
   "last_validation": {
     "ok": true,
     "error_count": 0,
-    "warning_count": 2,
+    "warning_count": 0,
     "report_path": "/home/zuoky/project2/first-workflow-case/views/validation-report.html",
-    "validated_at": "2026-05-22T15:38:49Z"
+    "validated_at": "2026-06-01T12:41:37Z"
   },
-  "recommended_next_step": "优先处理 pending ideas，并把确认内容并入 canon / outline / timeline。",
-  "updated_at": "2026-05-22T15:38:49Z"
+  "recommended_next_step": "继续扩充正式大纲，并在每轮改动后运行 validator。",
+  "updated_at": "2026-06-01T12:41:51Z"
 }

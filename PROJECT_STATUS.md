@@ -1,6 +1,6 @@
 # Project Status
 
-最后更新：2026-05-28
+最后更新：2026-06-01
 
 ## 项目定位
 
@@ -18,7 +18,46 @@
 
 ## 当前阶段
 
-当前处于 `P0 主链路加固期`。
+当前处于 `P0 主链路收口与工作区级验收期`。
+
+## 当前战略判断
+
+项目的主要矛盾已经变了。
+
+前一阶段的重点是把：
+
+- consistency-check
+- merge plan
+- exception / grouped summary
+- claim / subject-scope
+
+这些底层能力做厚，避免主链路还没站稳时就过早进入工作区验收。
+
+但到当前这一轮，继续深挖中文句式级边界的收益已经开始下降。  
+接下来更重要的不是“还能再补多少误判规则”，而是：
+
+- `ingest -> check-consistency -> plan-merge -> apply-merge -> validate` 能不能在真实 workspace 里稳定闭环
+- `plan_idea_merge / apply_idea_merge` 是否已经足够可执行
+- `demo-workspace/` 与 `first-workflow-case/` 是否始终维持清晰的 pending path
+
+因此当前阶段的默认工作重点调整为：
+
+1. 先定义 `P0` 收口标准
+2. 再做工作区级验收
+3. 只有在真实闭环被卡住时，才回头修对应规则
+
+当前这条判断已经有了第一轮实证支撑：
+
+- `docs/p0-closure-checklist.md` 已建立
+- `first-workflow-case/` 已完成首轮完整闭环
+- 这轮验收暴露出的核心问题，不再是新的句式误判，而是 `apply_idea_merge.py` 的 CLI 能力缺口与“多 merge inputs 如何顺滑消费”的执行层问题
+
+第二轮工作区级验收也已经补上：
+
+- `demo-workspace/` 已完成一轮 `pending -> consistency -> plan` 验收
+- 暴露出的核心问题不是新的 consistency 规则缺口，而是 `warning-only / needs-info` case 的工作流提示不够具体
+- `workspace-status.json` 与 pipeline `auto` 现在已经开始把这类 case 明确收敛到 `repair-intake` 路径，而不再泛化成继续 `plan-merge`
+- `apply_idea_merge.py` 现已支持一次性消费多条 `merge_input_id`，`timeline / outline / canon` 的组合写入不再需要手工拼参数
 
 已经完成的方向：
 
@@ -36,6 +75,8 @@
 - graph-aware consistency 豁免
 - formal intake backfill / repair 入口
 - domain-specific merge plan explainers
+- `needs-info` pending path 显式化：当 merge plan 缺少 `chapter_number` 等关键字段时，状态层与 orchestrator 已会优先提示 `repair-intake`
+- multi-input apply 入口：CLI 与底层 `apply_idea_merge` 已支持一条 idea 一次性消费一组 merge inputs
 
 ## 已完成能力
 
@@ -158,6 +199,10 @@
 - 对 `claim-match`，如果中间只是提到别的角色、后面又回到规则主体的第二个 knowledge verb，draft claim 抽取现在也不会再凭空造出那名角色的假 claim
 - 对 draft claim 抽取，像“林舟和苏岚都知道...”这类并列主体共用一个 knowledge verb 的句式，仍会继续稳定拆成多主体 claim，不会被窗口收紧误截断
 - 对 draft claim 抽取，像“林舟与阿岚知道...”这种别名参与的并列主体共享 knowledge verb，现也会继续稳定拆成 `林舟 / 苏岚` 两条 claim
+- 对 draft claim 抽取与 subject-scope 扫描，如果第二主体只是落在“告诉 / 告知 / 提醒 / 通知”后的受词位置，后面的 knowledge verb 现在也会继续归给规则主体，不会再把“林舟告诉苏岚自己知道...”误抽成苏岚知情，或误升成 `mixed-subjects`
+- 对 draft claim 抽取与 subject-scope 扫描，如果第二主体只是落在“从 / 由 / 经 + 某人 + 那里 / 这边 / 口中 / 处”这类来源短语里，后面的 knowledge verb 现在也会继续归给规则主体，不会再把“林舟从苏岚那里知道...”误抽成来源角色知情，或误升成 `mixed-subjects`
+- 对 draft claim 抽取与 subject-scope 扫描，如果第二主体只是落在“听某人提起 / 说起 / 讲起”这类转述来源短语里，后面的 knowledge verb 现在也会继续归给规则主体，不会再把“林舟听苏岚提起后知道...”误抽成来源角色知情
+- 对 draft claim 抽取与 subject-scope 扫描，如果第二主体只是落在“因 / 因为某人一句话 / 提醒 / 提点”这类触发短语里，后面的 knowledge verb 现在也会继续归给规则主体，不会再把“林舟因苏岚一句话才知道...”误抽成触发角色知情
 - 对 draft claim 抽取与 subject-scope 扫描，如果另一角色只有短 alias 或称谓，且这枚 token 只是嵌在“岚城 / 阿岚街 / 白狼营 / 白狼帮 / 白狼会 / 白狼令 / 白狼封阵术 / 持白狼封阵术 / 借白狼封阵术 / 操控白狼巨舰”这类地名、设定名词、组织名、机构名或物件/术式名里，consistency 现在也不会再把它误当主体命中，更不会因此截断规则主体窗口或凭空造出假 claim
 - 对 draft claim 抽取，如果规则主体只是“意识到 / 知道 / 发现”另一个角色已经知情，后面的嵌套 knowledge 子句现在也不会再反向污染规则主体本人，不会再把“林舟意识到苏岚知道...”误抽成林舟直接知道该事实
 - 对 draft claim 抽取，如果外层只是“怀疑 / 猜测 / 听说 / 觉得 / 担心”另一个角色已经知情，内层 knowledge 子句现在也不会再被当成该角色已被正式证实的 direct claim，不会再把“林舟怀疑白狼知道...”误报成白狼真的知道

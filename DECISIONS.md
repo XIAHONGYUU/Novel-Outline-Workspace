@@ -2,6 +2,87 @@
 
 这个文件记录会影响项目方向、实现边界和协作方式的关键决策。
 
+## 2026-06-01
+
+### 决策：`apply_idea_merge` 继续沿用单入口，但要支持一条 idea 一次性消费多条 `merge_input_id`
+
+当前状态：
+
+- `plan_idea_merge` 已能为同一条 idea 产出多条可 direct apply 的结构化输入
+- 真实案例里最常见的组合已经不只是单条 timeline 输入，而是 `timeline / outline / canon` 联动写入
+- 如果 CLI 只能吃一条 `merge_input_id`，就会迫使使用者手工拼多套参数，或者逐条 apply 并覆盖 idea 元数据
+
+因此这一轮不新增第二套 apply 脚本，而是在现有 `apply_idea_merge` 上继续扩：
+
+- `scripts/apply_idea_merge.py` 支持重复传入 `--merge-input-id`
+- 底层 `apply_idea_merge` 支持一次性合并一组 `merge_input_id`
+- `state/idea-log.json` 开始记录 `applied_merge_input_ids`
+
+原因：
+
+- 这比新造一套“batch apply”入口更稳，也更符合现有 `plan -> apply` 主链路
+- 用户仍只需要记住一个 apply 命令，心智成本更低
+- 这能直接覆盖 `first-workflow-case` 里最典型的 `timeline + knowledge-state` 组合写入
+
+影响：
+
+- `merge / apply` 的可执行性问题从“必须手工补参数”收敛成“默认直接消费 plan 输入”
+- 后续工作区级验收可以更真实地测试一条 idea 的多层联动写入
+- 下一阶段优先级进一步转向工作区级集成测试，而不是继续扩单条规则补丁
+
+### 决策：`warning-only` 但仍缺关键字段的 pending idea，工作流默认进入 `repair-intake`
+
+当前状态：
+
+- `demo-workspace/` 暴露出一种真实 case：consistency 没有硬冲突，但 merge plan 仍缺 `chapter_number`
+- 旧版 pipeline `auto` 会把这种 case 泛化成继续 `plan-merge`
+- 这会让“没有 blocker”被误读成“已经可以 apply”
+
+因此这一轮开始：
+
+- `workspace-status.json` 的 `recommended_next_step` 要直接指出缺什么字段
+- orchestrator 默认把这类 case 收敛到 `repair-intake`
+- `repair-intake` 成为显式流程动作，而不是隐含在人工判断里
+
+原因：
+
+- 真实工作区更需要“下一步做什么”足够具体，而不是继续给泛化状态
+- 这类问题属于执行链路缺口，不是新的 consistency 规则缺口
+- 先把 pending path 解释清楚，比继续补句式规则更值钱
+
+影响：
+
+- `demo-workspace/` 这类 `needs-info` case 现在能明确停在 intake 修补层
+- `P0` 验收开始真正区分 `blocked / needs-info / ready`
+- 顶层计划默认继续向 `repair -> plan -> apply` 的集成闭环推进
+
+### 决策：从规则微调优先，切到 `P0` 收口与工作区级验收优先
+
+当前状态：
+
+- `consistency -> merge` 主链路的底层规则已经补到较细粒度
+- `subject-scope / claim-level` 的局部误判已经覆盖到受词、来源、转述来源、触发短语等一层
+- 继续深挖中文句式级边界，边际收益已经下降
+
+因此从这一轮开始，默认优先级调整为：
+
+- 先定义 `P0` 收口标准
+- 再用 `demo-workspace/` 与 `first-workflow-case/` 做工作区级验收
+- 优先修会阻断真实闭环的 `merge / apply / validate` 问题
+- 只有当真实 workspace 被明确卡住时，才回头补对应规则
+
+原因：
+
+- 项目当前更缺的是“可稳定交付的一轮闭环”，不是继续堆更多规则微优化
+- 如果没有工作区级验收，规则层再细，也无法证明主链路真的可用
+- 先锁定阶段收口线，后续 `timeline merge` 的推进才有稳定起点
+
+影响：
+
+- `NEXT_ACTIONS.md` 不再默认把句式级规则细化放在第一优先级
+- 后续任务拆分会更偏向 checklist、workspace walkthrough、apply 稳定性和集成测试
+- 规则补丁仍然允许继续做，但默认要由真实 workspace 卡点来驱动
+
 ## 2026-05-12
 
 ### 决策：采用固定的根目录协作文档

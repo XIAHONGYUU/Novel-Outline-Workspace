@@ -1,3 +1,15 @@
 {
-  "events": []
+  "events": [
+    {
+      "id": "event-林舟在白塔档案室发现泄密账册",
+      "label": "林舟在白塔档案室发现泄密账册",
+      "chronological_index": 3,
+      "reading_chapter": 3,
+      "participants": [
+        "char-protagonist"
+      ],
+      "location": "白塔档案室",
+      "notes": "林舟在第三章的白塔档案室发现密账，由此知道议会内部有人泄密。"
+    }
+  ]
 }

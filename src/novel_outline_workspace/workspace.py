@@ -117,6 +117,24 @@ STOP_TAGS = {
     "告诉",
 }
 
+INTAKE_REPAIR_WARNING_CODES = {
+    "intake-open-question",
+    "missing-chapter-hint",
+    "missing-location-candidate",
+}
+
+MERGE_MISSING_FIELD_LABELS = {
+    "chapter_number": "章节号",
+    "reading_chapter": "阅读章序",
+    "participant_ids": "事件参与角色",
+    "event_label": "事件标题",
+    "scene_title": "场景标题",
+    "relationship_character_ids": "关系角色",
+    "relationship_reading_chapter": "关系发生章序",
+    "knowledge_reading_chapter": "知情发生章序",
+    "rule_applies_until_event_id": "规则截止事件",
+}
+
 NOISY_TAG_FRAGMENTS = (
     "在",
     "可能",
@@ -173,6 +191,123 @@ def _default_status(workspace: Path) -> dict[str, Any]:
     }
 
 
+def _consistency_report_path(workspace: Path, idea_id: str) -> Path:
+    return workspace / "state/consistency-checks" / f"{idea_id}.json"
+
+
+def _merge_plan_path(workspace: Path, idea_id: str) -> Path:
+    return workspace / "state/merge-plans" / f"{idea_id}.json"
+
+
+def _sortable_timestamp(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _merge_plan_missing_fields(plan: dict[str, Any]) -> list[str]:
+    missing_fields: set[str] = set()
+    for item in plan.get("timeline_merge_inputs", []):
+        for field in item.get("missing_fields", []):
+            token = str(field or "").strip()
+            if token:
+                missing_fields.add(token)
+    for action in plan.get("proposed_actions", []):
+        for field in action.get("missing_fields", []):
+            token = str(field or "").strip()
+            if token:
+                missing_fields.add(token)
+    return sorted(missing_fields)
+
+
+def _format_missing_field_labels(fields: list[str]) -> str:
+    labels: list[str] = []
+    for field in fields:
+        label = MERGE_MISSING_FIELD_LABELS.get(field, field)
+        if label not in labels:
+            labels.append(label)
+    if not labels:
+        return ""
+    if len(labels) <= 3:
+        return "、".join(labels)
+    return "、".join(labels[:3]) + " 等信息"
+
+
+def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict[str, Any]:
+    idea_id = str(idea.get("id") or "").strip()
+    report_path = _consistency_report_path(workspace, idea_id)
+    if not report_path.exists():
+        return {
+            "idea_id": idea_id,
+            "report_status": "missing",
+            "has_conflicts": False,
+            "needs_intake_repair": False,
+            "warning_codes": [],
+            "open_questions": [],
+            "missing_fields": [],
+        }
+
+    report = read_json(report_path, {})
+    if _sortable_timestamp(report.get("checked_at")) < _sortable_timestamp(idea.get("updated_at")):
+        return {
+            "idea_id": idea_id,
+            "report_status": "stale",
+            "has_conflicts": False,
+            "needs_intake_repair": False,
+            "warning_codes": [],
+            "open_questions": [],
+            "missing_fields": [],
+        }
+
+    issues = report.get("issues", [])
+    has_conflicts = any(
+        issue.get("level") == "error" or str(issue.get("code", "")).endswith("-conflict")
+        for issue in issues
+    )
+    warning_codes = sorted(
+        {
+            str(issue.get("code", "")).strip()
+            for issue in issues
+            if issue.get("level") == "warning" and str(issue.get("code", "")).strip()
+        }
+    )
+    draft = report.get("draft", {})
+    open_questions = [str(item).strip() for item in draft.get("open_questions", []) if str(item).strip()]
+
+    plan_path = _merge_plan_path(workspace, idea_id)
+    plan = read_json(plan_path, {}) if plan_path.exists() else {}
+    missing_fields = _merge_plan_missing_fields(plan)
+
+    return {
+        "idea_id": idea_id,
+        "report_status": "fresh",
+        "has_conflicts": has_conflicts,
+        "needs_intake_repair": bool(
+            missing_fields or open_questions or set(warning_codes) & INTAKE_REPAIR_WARNING_CODES
+        ),
+        "warning_codes": warning_codes,
+        "open_questions": open_questions,
+        "missing_fields": missing_fields,
+    }
+
+
+def describe_pending_idea_next_step(workspace: Path, idea: dict[str, Any]) -> str:
+    progress = inspect_pending_idea_progress(workspace, idea)
+    title = str(idea.get("title") or progress.get("idea_id") or "pending idea")
+
+    if progress["report_status"] == "missing":
+        return f"先为 `{title}` 运行 consistency check，再决定如何 merge。"
+    if progress["report_status"] == "stale":
+        return f"先重跑 `{title}` 的 consistency check，再继续 merge。"
+    if progress["has_conflicts"]:
+        return f"先处理 `{title}` 的 consistency 冲突，再决定如何 merge。"
+    if progress["needs_intake_repair"]:
+        if progress["missing_fields"]:
+            return f"先补 `{title}` 的 { _format_missing_field_labels(progress['missing_fields']) }，再继续 apply merge。"
+        if progress["open_questions"]:
+            return f"先回答 `{title}` 的 intake 待确认问题，再继续 merge。"
+        return f"先补 `{title}` 的 intake 信息，再继续 merge。"
+    return f"优先处理 `{title}`，并把确认内容并入 canon / outline / timeline。"
+
+
 def _load_scene_records(workspace: Path) -> list[dict[str, Any]]:
     scene_index = read_json(workspace / "outline/scene-index.json", {"chapters": []})
     records: list[dict[str, Any]] = []
@@ -220,7 +355,11 @@ def collect_workspace_status(workspace: Path) -> dict[str, Any]:
         status["recommended_next_step"] = "先处理 views/validation-report.html 里的错误，再继续补大纲。"
     elif idea_counts["pending"] > 0:
         status["workspace_mode"] = "extend-existing"
-        status["recommended_next_step"] = "优先处理 pending ideas，并把确认内容并入 canon / outline / timeline。"
+        first_pending = next((item for item in idea_log.get("ideas", []) if item.get("status") == "pending"), None)
+        if first_pending is not None:
+            status["recommended_next_step"] = describe_pending_idea_next_step(workspace, first_pending)
+        else:
+            status["recommended_next_step"] = "优先处理 pending ideas，并把确认内容并入 canon / outline / timeline。"
     elif status["entity_counts"]["scenes"] == 0:
         status["workspace_mode"] = "fresh"
         status["recommended_next_step"] = "补第一批正式 scenes 和 timeline events。"

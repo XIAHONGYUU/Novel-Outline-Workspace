@@ -7,7 +7,7 @@
 - novel: `白塔疑案`
 - protagonist: `林舟`
 - current case: `idea-20260522-001`
-- current stage: `check-consistency` 已通过，`plan-merge` 已生成，尚未 `apply`
+- current stage: 已完成 `ingest -> check-consistency -> plan-merge -> apply-merge -> validate`
 - case note: `reports/first-workflow-case.md`
 
 建议流程：
