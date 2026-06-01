@@ -19,10 +19,28 @@ from .workspace import (
 GENERIC_CHARACTER_MENTIONS = {"主角", "反派", "导师", "师姐", "师兄", "师父", "议长", "议会"}
 FIRST_MEETING_TOKENS = ("初见", "初次见面", "首次见面", "第一次见", "第一次认识", "第一次相遇", "第一次碰面")
 UNFAMILIAR_RELATION_TOKENS = ("不认识", "并不认识", "素不相识", "互不认识")
-RELATIONSHIP_STATE_TOKENS = ("结盟", "和解", "决裂", "背叛", "认识")
+RELATIONSHIP_STATE_TOKENS = ("化干戈为玉帛", "破镜重圆", "冰释前嫌", "尽释前嫌", "握手言和", "言归于好", "重归于好", "重修旧好", "一笑泯恩仇", "结盟", "和解", "反目成仇", "反目为仇", "反目", "彻底翻脸", "翻脸", "撕破脸皮", "撕破脸", "闹翻", "恩断义绝", "决裂", "背叛", "认识")
 RELATIONSHIP_TOKEN_TO_STATE = {
+    "化干戈为玉帛": "reconciled",
+    "破镜重圆": "reconciled",
+    "冰释前嫌": "reconciled",
+    "尽释前嫌": "reconciled",
+    "握手言和": "reconciled",
+    "言归于好": "reconciled",
+    "重归于好": "reconciled",
+    "重修旧好": "reconciled",
+    "一笑泯恩仇": "reconciled",
     "结盟": "allied",
     "和解": "reconciled",
+    "反目成仇": "ruptured",
+    "反目为仇": "ruptured",
+    "反目": "ruptured",
+    "彻底翻脸": "ruptured",
+    "翻脸": "ruptured",
+    "撕破脸皮": "ruptured",
+    "撕破脸": "ruptured",
+    "闹翻": "ruptured",
+    "恩断义绝": "ruptured",
     "决裂": "ruptured",
     "背叛": "betrayed",
     "认识": "acquainted",
@@ -45,7 +63,14 @@ FIRST_KNOWLEDGE_TOKENS = (
 )
 KNOWLEDGE_PREFIX_TOKENS = ("原来", "其实", "已经", "也", "还", "就", "才", "终于", "开始", "逐渐")
 KNOWLEDGE_RECAP_TOKENS = ("再次", "重新", "又", "已经", "早已", "早就")
-RELATIONSHIP_REPEAT_TOKENS = ("重新", "再次", "又")
+RELATIONSHIP_REPEAT_TOKENS = ("重新", "再次", "再度", "重归于好", "重修旧好", "言归于好", "握手言和", "冰释前嫌", "尽释前嫌", "破镜重圆", "一笑泯恩仇", "化干戈为玉帛", "又")
+SUBJECT_EMBEDDED_NOUN_SUFFIXES = {"城", "桥", "谷", "峰", "巷", "镇", "村", "山", "河", "湖", "海", "岛", "街", "楼", "阁", "宫", "门", "殿", "府", "厅", "堡", "关", "岭", "林", "湾", "原", "岸", "崖", "亭", "轩", "驿", "营", "军", "寨", "坊", "院", "司", "堂", "帮", "派", "盟", "队", "社", "部", "组", "团", "局", "所", "馆", "会", "宗", "教", "署", "处", "台", "坛", "苑", "仓", "库", "舫", "令", "旗", "阵", "印", "符", "丹", "诀", "法", "图", "盘", "锁", "钥", "舟", "舰", "枪", "剑", "术", "号"}
+SUBJECT_EMBEDDED_PREFIX_CHARS = {"在", "于", "入", "到", "从", "向", "朝", "往", "经", "临"}
+SUBJECT_EMBEDDED_ACTION_PREFIXES = {"持", "借", "催动", "施展", "唤出", "唤起", "祭出", "祭起", "使出", "打出", "发动", "催发", "动用", "引动", "操控", "驾驭", "运转"}
+SUBJECT_EMBEDDED_ACTION_TRAILING_CHARS = {"起", "开", "出"}
+SPECULATIVE_EMBEDDED_KNOWLEDGE_PREFIXES = {"怀疑", "猜测", "担心", "听说", "听闻", "据说", "传闻", "觉得", "以为", "误以为"}
+SPECULATIVE_SUBJECT_FILLER_TOKENS = ("那个", "这个", "那名", "这名", "那位", "这位")
+SPECULATIVE_SUBJECT_TIME_FILLER_TOKENS = ("那时", "这时", "此时", "当时", "彼时", "那天", "这天", "当天", "那晚", "当晚", "当夜", "此刻")
 KNOWLEDGE_OBJECT_GENERIC_SUFFIXES = ("真相", "秘密", "消息", "一事", "这件事", "这回事")
 KNOWLEDGE_OBJECT_CANONICAL_REPLACEMENTS = (
     ("并不是", "不是"),
@@ -514,10 +539,19 @@ def _knowledge_signals_near_subject(
     for term in normalized_subject_terms:
         start = 0
         while True:
-            subject_index = haystack.find(term, start)
+            subject_index = _find_subject_occurrence(haystack, term, start)
             if subject_index < 0:
                 break
-            window_end = _subject_window_end(haystack, subject_index, len(term), normalized_all_subject_terms)
+            if _is_speculative_embedded_knowledge_subject(haystack, subject_index):
+                start = subject_index + len(term)
+                continue
+            window_end = _subject_window_end(
+                haystack,
+                subject_index,
+                len(term),
+                normalized_all_subject_terms,
+                normalized_subject_terms,
+            )
             window = haystack[subject_index:window_end]
             for signal in _extract_knowledge_signals(window, normalized_subject_terms):
                 key = (str(signal.get("verb") or ""), str(signal.get("object_key") or ""))
@@ -557,19 +591,170 @@ def _extract_knowledge_signals(text: str, removable_terms: list[str] | None = No
     return signals
 
 
+def _is_subject_boundary_char(char: str) -> bool:
+    return not char or char.isspace() or char in "，。；：！？,.!?、（）()[]{}《》<>\"'“”‘’\n\t"
+
+
+def _looks_like_prefixed_embedded_noun(prev_char: str, next_segment: str) -> bool:
+    if prev_char not in SUBJECT_EMBEDDED_PREFIX_CHARS:
+        return False
+    trimmed_segment = next_segment
+    prefix_changed = True
+    while prefix_changed and trimmed_segment:
+        prefix_changed = False
+        for token in KNOWLEDGE_PREFIX_TOKENS:
+            if trimmed_segment.startswith(token):
+                trimmed_segment = trimmed_segment[len(token) :]
+                prefix_changed = True
+                break
+    if any(trimmed_segment.startswith(token) for token in KNOWLEDGE_STATE_TOKENS):
+        return False
+    for char in next_segment[:4]:
+        if _is_subject_boundary_char(char):
+            break
+        if char in SUBJECT_EMBEDDED_NOUN_SUFFIXES:
+            return True
+    return False
+
+
+def _looks_like_action_prefixed_embedded_noun(prefix_segment: str, next_segment: str) -> bool:
+    if not any(
+        prefix_segment.endswith(token)
+        or any(prefix_segment.endswith(f"{token}{suffix}") for suffix in SUBJECT_EMBEDDED_ACTION_TRAILING_CHARS)
+        for token in SUBJECT_EMBEDDED_ACTION_PREFIXES
+    ):
+        return False
+    trimmed_segment = next_segment
+    prefix_changed = True
+    while prefix_changed and trimmed_segment:
+        prefix_changed = False
+        for token in KNOWLEDGE_PREFIX_TOKENS:
+            if trimmed_segment.startswith(token):
+                trimmed_segment = trimmed_segment[len(token) :]
+                prefix_changed = True
+                break
+    if any(trimmed_segment.startswith(token) for token in KNOWLEDGE_STATE_TOKENS):
+        return False
+    for char in next_segment[:4]:
+        if _is_subject_boundary_char(char):
+            break
+        if char in SUBJECT_EMBEDDED_NOUN_SUFFIXES:
+            return True
+    return False
+
+
+def _is_speculative_embedded_knowledge_subject(haystack: str, subject_index: int) -> bool:
+    prefix_segment = haystack[max(0, subject_index - 12) : subject_index]
+    if any(_is_subject_boundary_char(char) for char in prefix_segment):
+        prefix_segment = re.split(r"[，。；：！？\n]", prefix_segment)[-1]
+    trimmed_segment = prefix_segment
+    filler_changed = True
+    while filler_changed and trimmed_segment:
+        filler_changed = False
+        for token in SPECULATIVE_SUBJECT_FILLER_TOKENS:
+            if trimmed_segment.endswith(token):
+                trimmed_segment = trimmed_segment[: -len(token)]
+                filler_changed = True
+                break
+        if filler_changed:
+            continue
+        chapter_trimmed = re.sub(r"第[一二三四五六七八九十百两0-9]+章$", "", trimmed_segment)
+        if chapter_trimmed != trimmed_segment:
+            trimmed_segment = chapter_trimmed
+            filler_changed = True
+            continue
+        for token in SPECULATIVE_SUBJECT_TIME_FILLER_TOKENS:
+            if trimmed_segment.endswith(token):
+                trimmed_segment = trimmed_segment[: -len(token)]
+                filler_changed = True
+                break
+        if filler_changed:
+            continue
+        if trimmed_segment.endswith(("在", "于")):
+            trimmed_segment = trimmed_segment[:-1]
+            filler_changed = True
+    return any(trimmed_segment.endswith(token) for token in SPECULATIVE_EMBEDDED_KNOWLEDGE_PREFIXES)
+
+
+def _looks_like_subject_occurrence(haystack: str, term: str, index: int) -> bool:
+    prev_char = haystack[index - 1] if index > 0 else ""
+    prefix_segment = haystack[max(0, index - 4) : index]
+    next_index = index + len(term)
+    next_char = haystack[next_index] if next_index < len(haystack) else ""
+    next_segment = haystack[next_index : next_index + 4]
+    if next_char in SUBJECT_EMBEDDED_NOUN_SUFFIXES:
+        return False
+    if _looks_like_prefixed_embedded_noun(prev_char, next_segment):
+        return False
+    if _looks_like_action_prefixed_embedded_noun(prefix_segment, next_segment):
+        return False
+    if len(term) > 1:
+        return True
+    prev_ok = not prev_char or _is_subject_boundary_char(prev_char) or prev_char in {"和", "与", "及", "、", "跟", "同"}
+    next_ok = (
+        not next_segment
+        or _is_subject_boundary_char(next_segment[0])
+        or any(
+            next_segment.startswith(token)
+            for token in (
+                *KNOWLEDGE_STATE_TOKENS,
+                *KNOWLEDGE_PREFIX_TOKENS,
+                *KNOWLEDGE_RECAP_TOKENS,
+                "在",
+                "于",
+                "都",
+                "也",
+                "又",
+                "还",
+                "就",
+                "才",
+                "将",
+                "正",
+                "会",
+                "能",
+                "要",
+                "可",
+                "一起",
+                "同时",
+                "并且",
+                "并",
+                "和",
+                "与",
+                "及",
+                "、",
+            )
+        )
+    )
+    return prev_ok and next_ok
+
+
+def _find_subject_occurrence(haystack: str, term: str, start: int = 0, end: int | None = None) -> int:
+    if not term:
+        return -1
+    cursor = start
+    while True:
+        index = haystack.find(term, cursor, end)
+        if index < 0:
+            return -1
+        if _looks_like_subject_occurrence(haystack, term, index):
+            return index
+        cursor = index + max(len(term), 1)
+
+
 def _subject_window_end(
     haystack: str,
     subject_index: int,
     subject_length: int,
     all_subject_terms: list[str],
+    current_subject_terms: list[str] | None = None,
 ) -> int:
     default_end = min(len(haystack), subject_index + 96)
     search_start = subject_index + max(subject_length, 1)
     next_subject_indexes = sorted(
         {
-            haystack.find(term, search_start)
+            _find_subject_occurrence(haystack, term, search_start)
             for term in all_subject_terms
-            if term and haystack.find(term, search_start) >= 0
+            if term and _find_subject_occurrence(haystack, term, search_start) >= 0
         }
     )
     if not next_subject_indexes:
@@ -584,6 +769,30 @@ def _subject_window_end(
     first_verb_index = min(first_verb_indexes)
     first_next_subject_index = next_subject_indexes[0]
     if first_next_subject_index < first_verb_index:
+        bridge_text = haystack[search_start:first_verb_index]
+        normalized_bridge = bridge_text
+        for term in all_subject_terms:
+            if term:
+                normalized_bridge = normalized_bridge.replace(term, "")
+        normalized_bridge = re.sub(r"第[一二三四五六七八九十百两0-9]+章", "", normalized_bridge)
+        for token in ("和", "与", "及", "、", "都", "也", "一起", "同时", "在"):
+            normalized_bridge = normalized_bridge.replace(token, "")
+        normalized_bridge = normalized_bridge.strip(" ，。；：,.!? \n\t")
+        coordinated_shared_verb = (
+            any(token in bridge_text for token in ("和", "与", "及", "、"))
+            and not any(token in bridge_text for token in ("，", "。", "！", "？", "；"))
+            and not normalized_bridge
+        )
+        if coordinated_shared_verb:
+            return default_end
+        if current_subject_terms:
+            repeated_current_subject = any(
+                _find_subject_occurrence(haystack, term, first_next_subject_index, first_verb_index) >= 0
+                for term in current_subject_terms
+                if term
+            )
+            if not repeated_current_subject:
+                return min(default_end, first_next_subject_index)
         return default_end
     return min(default_end, first_next_subject_index)
 
@@ -615,10 +824,19 @@ def _extract_draft_knowledge_claims(
         for term in terms:
             start = 0
             while True:
-                subject_index = haystack.find(term, start)
+                subject_index = _find_subject_occurrence(haystack, term, start)
                 if subject_index < 0:
                     break
-                window_end = _subject_window_end(haystack, subject_index, len(term), all_subject_terms)
+                if _is_speculative_embedded_knowledge_subject(haystack, subject_index):
+                    start = subject_index + len(term)
+                    continue
+                window_end = _subject_window_end(
+                    haystack,
+                    subject_index,
+                    len(term),
+                    all_subject_terms,
+                    terms,
+                )
                 window = haystack[subject_index:window_end]
                 for verb in KNOWLEDGE_STATE_TOKENS:
                     verb_start = len(term)
@@ -1243,6 +1461,7 @@ def _subject_matches_rule(
 
 def _world_rule_context_subject_scope(
     draft: dict[str, Any],
+    canon_index: dict[str, Any],
     knowledge_claims: list[dict[str, Any]],
     *,
     rule_subject: str,
@@ -1252,14 +1471,35 @@ def _world_rule_context_subject_scope(
         for claim in knowledge_claims
         if str(claim.get("subject_name") or "").strip()
     }
-    context_subjects.update(
-        str(item).strip()
-        for item in draft.get("character_mentions", [])
-        if str(item).strip()
-    )
     normalized_rule_subject = str(rule_subject or "").strip()
     if normalized_rule_subject:
         context_subjects.add(normalized_rule_subject)
+    haystack = f"{draft.get('title', '')}\n{draft.get('content', '')}"
+    all_subject_terms = _rule_subject_candidates(canon_index)
+    rule_subject_id = _rule_subject_id(rule_subject, canon_index)
+    for character in canon_index.get("characters", []):
+        subject_name = str(character.get("name") or "").strip()
+        if not subject_name or subject_name in context_subjects:
+            continue
+        if _subject_matches_rule(
+            subject_id=character.get("id"),
+            subject_name=subject_name,
+            rule_subject=rule_subject,
+            rule_subject_id=rule_subject_id,
+        ):
+            continue
+        subject_terms = [subject_name]
+        subject_terms.extend(
+            str(alias).strip()
+            for alias in character.get("aliases", [])
+            if str(alias).strip()
+        )
+        if _knowledge_signals_near_subject(
+            haystack,
+            subject_terms=subject_terms,
+            all_subject_terms=all_subject_terms,
+        ):
+            context_subjects.add(subject_name)
     if len(context_subjects) <= 1:
         return "shared-subject"
     return "split-subjects"
@@ -1283,12 +1523,51 @@ def _local_signal_subject_scope(
     for term in normalized_subject_terms:
         start = 0
         while True:
-            subject_index = haystack.find(term, start)
+            subject_index = _find_subject_occurrence(haystack, term, start)
             if subject_index < 0:
                 break
-            window_end = _subject_window_end(haystack, subject_index, len(term), list(normalized_subject_terms | set(other_subject_terms)))
+            window_end = min(len(haystack), subject_index + 96)
             window = haystack[subject_index:window_end]
-            if any(other_term in window for other_term in other_subject_terms):
+            verb_indexes = [window.find(verb) for verb in KNOWLEDGE_STATE_TOKENS if window.find(verb) >= 0]
+            first_verb_index = min(verb_indexes) if verb_indexes else -1
+            mixed_subject_window = False
+            for other_term in other_subject_terms:
+                search_from = 0
+                while True:
+                    other_index = _find_subject_occurrence(window, other_term, search_from)
+                    if other_index < 0:
+                        break
+                    if first_verb_index >= 0 and other_index < first_verb_index:
+                        # Treat "X 和 Y..., X 知道..." as X-only unless Y still owns the first knowledge verb.
+                        repeated_rule_subject_before_verb = any(
+                            _find_subject_occurrence(window, rule_term, other_index + len(other_term), first_verb_index) >= 0
+                            for rule_term in normalized_subject_terms
+                        )
+                        if not repeated_rule_subject_before_verb:
+                            mixed_subject_window = True
+                            break
+                    elif first_verb_index >= 0 and other_index > first_verb_index:
+                        later_verb_indexes = [
+                            window.find(verb, other_index + len(other_term))
+                            for verb in KNOWLEDGE_STATE_TOKENS
+                            if window.find(verb, other_index + len(other_term)) >= 0
+                        ]
+                        if later_verb_indexes:
+                            first_later_verb_index = min(later_verb_indexes)
+                            repeated_rule_subject_before_later_verb = any(
+                                _find_subject_occurrence(window, rule_term, other_index + len(other_term), first_later_verb_index) >= 0
+                                for rule_term in normalized_subject_terms
+                            )
+                            if not repeated_rule_subject_before_later_verb:
+                                mixed_subject_window = True
+                                break
+                    else:
+                        mixed_subject_window = True
+                        break
+                    search_from = other_index + len(other_term)
+                if mixed_subject_window:
+                    break
+            if mixed_subject_window:
                 return "mixed-subjects"
             start = subject_index + len(term)
     return "shared-subject"
@@ -1334,6 +1613,8 @@ def _matching_world_rule_exception(
     rule_subject_id = _rule_subject_id(rule_subject, canon_index)
     rule_subject_terms = _rule_subject_terms(rule_subject, rule_subject_id, canon_index)
     all_subject_terms = _rule_subject_candidates(canon_index)
+    best_match: dict[str, Any] | None = None
+    best_score: tuple[int, int, int] | None = None
     for exception in canon_index.get("world_rule_exceptions", []):
         if str(exception.get("rule_id") or "").strip() != rule_id:
             continue
@@ -1349,8 +1630,9 @@ def _matching_world_rule_exception(
         if not exception_subject_matches_rule:
             continue
         exception_object = str(exception.get("object_key") or exception.get("object_phrase") or "")
+        matched = False
         if knowledge_claims:
-            if any(
+            matched = any(
                 _claim_matches_world_rule(
                     claim,
                     rule_subject=rule_subject,
@@ -1358,17 +1640,29 @@ def _matching_world_rule_exception(
                     rule_object=exception_object,
                 )
                 for claim in knowledge_claims
-            ):
-                return dict(exception)
+            )
+        else:
+            local_signals = _knowledge_signals_near_subject(
+                haystack,
+                subject_terms=rule_subject_terms,
+                all_subject_terms=all_subject_terms,
+            )
+            matched = any(
+                _knowledge_objects_match(exception_object, str(signal.get("object_key") or ""))
+                for signal in local_signals
+            )
+        if not matched:
             continue
-        local_signals = _knowledge_signals_near_subject(
-            haystack,
-            subject_terms=rule_subject_terms,
-            all_subject_terms=all_subject_terms,
+        chapter_score = int(exception_chapter) if isinstance(exception_chapter, int) else -1
+        score = (
+            1 if isinstance(exception_chapter, int) and exception_chapter == draft_chapter else 0,
+            1 if isinstance(exception_chapter, int) else 0,
+            chapter_score,
         )
-        if any(_knowledge_objects_match(exception_object, str(signal.get("object_key") or "")) for signal in local_signals):
-            return dict(exception)
-    return None
+        if best_score is None or score > best_score:
+            best_score = score
+            best_match = dict(exception)
+    return best_match
 
 
 def _check_world_rule_conflicts(
@@ -1439,6 +1733,7 @@ def _check_world_rule_conflicts(
             if exception_match_mode == "claim-match":
                 exception_subject_scope = _world_rule_context_subject_scope(
                     draft,
+                    canon_index,
                     knowledge_claims,
                     rule_subject=subject_key,
                 )

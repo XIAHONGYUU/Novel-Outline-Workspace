@@ -32,7 +32,7 @@
 
 ## 当前状态
 
-到 `2026-05-23` 为止，主链路已经推进到：
+到 `2026-05-27` 为止，主链路已经推进到：
 
 `ingest -> check-consistency -> plan-merge -> apply-merge -> validate`
 
@@ -109,6 +109,11 @@
   `relationship-history` 已开始豁免有显式状态转移后的未来重复状态，
   如果同章已经有正式关系 beat，也不会再被未来同状态记录误报成漂移；
   对 `world-rule`，consistency report 现在也开始显式写出已命中的正式 exemption，而不再只静默放行
+- claim / subject scope hardening
+  `check_idea_consistency` 现已继续收紧 `world-rule` 的主体归属边界：
+  如果短 alias / 称谓只是嵌在地名、设定名词、组织名、机构名、物件名或复合术式名里，
+  或者只是落在 `持 / 借 / 催动 / 施展 / 操控 / 驾驭 / 运转` 这类动作前缀带出的复合名中，
+  就不会再被误当成主体命中，也不会再凭空造出假 `knowledge_claim`
 
 仓库内当前也附带两个可直接查看的样本工作区：
 
@@ -122,7 +127,7 @@
 - `novel-timeline-merge`
 - 更细的 timeline-order / knowledge-state 规则
 - 更细的 relationship / world-rule exception 边界
-- 继续扩到更多 object family 的 claim 收敛
+- 继续扩到更多 object family 的 claim 收敛与 subject-scope 边界
 - grouped summary 与逐条 explainer 的进一步压缩，以及更细的 write-shape token
 - repair / merge explainers 的进一步收敛
 

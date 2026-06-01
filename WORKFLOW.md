@@ -8,10 +8,11 @@
 新想法
   -> inbox
   -> 结构化登记
-  -> merge plan
   -> 冲突校验
-  -> 人工确认
+  -> merge plan
+  -> 人工确认 / override
   -> 更新 canon / outline / timeline
+  -> validate
   -> 写回状态与 HTML 视图
 ```
 

@@ -1,6 +1,6 @@
 # Project Status
 
-最后更新：2026-05-23
+最后更新：2026-05-28
 
 ## 项目定位
 
@@ -112,10 +112,32 @@
 - 如果只有一部分 conflict rule 共享同一套动作签名，grouped summary 现在也会按 `rules=...` 再提 subset 级 `shared-conflict-actions`
 - 如果同一批 conflict 连策略、direct/override 和主体范围也完全一致，grouped summary 现在还会再提一条 `shared-conflict-structure`
 - 如果策略或主体不同、但 `direct / override / subject_scope` 仍重复，grouped summary 现在也会按 `rules=...` 再提一条 `shared-conflict-structure-tokens`
+- 如果同一批 mixed conflict 子组同时共享结构 token 和 `strategies/subjects + domains/targets`，grouped summary 现在也会把这两层局部描述合成一条 `shared-conflict-rule-metadata`
+- 如果同一批 mixed conflict 子组同时共享 `shared-conflict-rule-metadata` 和 action fields，grouped summary 现在也会再合成一条 `shared-conflict-rule-summary`
+- 如果当前批次的全局 conflict context 和全局 conflict actions 同时存在，grouped summary 现在也会把 `shared-conflict-context + shared-conflict-actions` 合成一条顶层 `shared-conflict-summary`
+- 如果这条顶层 conflict summary 对应的全部 rule 结构也完全一致，grouped summary 现在还会继续把 `shared-conflict-summary + shared-conflict-structure` 合成一条 `shared-conflict-overview`
 - 如果 mixed conflict 子组里 `strategies=` 或 `subjects=` 仍重复，grouped summary 现在也会按 `rules=...` 再提一条 `shared-conflict-rule-tokens`
+- 如果同一批 mixed conflict 子组同时共享 `strategies/subjects` 和 `domains/targets`，grouped summary 现在也会把这两条局部描述行合成一条 `shared-conflict-rule-details`
 - 如果 mixed conflict 子组里 `domains=` 或 `targets=` 仍重复，grouped summary 现在也会按 `rules=...` 再提一条 `shared-conflict-rule-context`
 - 如果 mixed conflict 子组里 `direct_impacts=` 或 `review_impacts=` 仍重复，grouped summary 现在也会按 `rules=...` 再提一条 `shared-conflict-rule-impacts`
 - 如果不同 conflict 子组虽然整体签名不同，但还共享同一批 `write_shapes`，grouped summary 现在也会按 `rules=...` 再提一条 `shared-conflict-write-shapes`
+- 如果同一批 mixed conflict 子组同时共享 `impacts` 和 `write_shapes`，grouped summary 现在也会把这两条局部 action 行合成一条 `shared-conflict-rule-actions`
+- 如果某条 conflict / exemption rule 行里的 `impacts=` 或 `write_shapes=` 只是 `direct_/review_` 桶的并集，grouped summary 现在也会直接省掉这层泛化字段，避免同一 token 在明细行里重复两次
+- 如果 `shared-exemption-base` 已经承载了公共 `domains / targets / reuse-exception impacts`，`shared-exemption-review` 现在也会自动扣掉这部分 base token，只保留 review 专属补充
+- 如果多条 exemption 共享同一批 `subject_scope / exception_scope_*` 元信息，grouped summary 现在也会按 `rules=...` 再提一条 `shared-exemption-scope`
+- 如果多条 exemption 共享同一批 `direct / review / subjects` 元信息，grouped summary 现在也会按 `rules=...` 再提一条 `shared-exemption-rule-tokens`
+- 如果某批 exemption 行在扣掉共享 token 后只剩 exception id，grouped summary 现在也会再提一条 `shared-exemption-links`，把这些壳行收成一条映射
+- 如果同一 rule 同时命中更早的 prior exception 和当前章 same-chapter exception，consistency / merge 现在也会优先选当前章那条，避免把本可 direct 的 case 误降成 review
+- relationship repeat hint 现在也开始覆盖 `再度` 这类常见重启关系 wording，减少“再度结盟 / 再度和解”被误报成 future drift
+- relationship state / repeat 词表现在也开始覆盖 `重归于好`、`反目` 这类常见关系表达，减少 reconciliation / rupture 场景的漏判与误报
+- relationship state / repeat 词表现在也开始覆盖 `冰释前嫌`、`翻脸` 这类常见关系表达，进一步补齐 reconciled / ruptured 的常见中文写法
+- relationship state / repeat 词表现在也开始覆盖 `破镜重圆`、`闹翻` 这类常见关系表达，继续补齐 reconciled / ruptured 的常见中文写法
+- relationship state / repeat 词表现在也开始覆盖 `言归于好`、`彻底翻脸` 这类常见关系表达，继续补齐 reconciled / ruptured 的常见中文写法
+- relationship state / repeat 词表现在也开始覆盖 `握手言和`、`恩断义绝` 这类常见关系表达，继续补齐 reconciled / ruptured 的常见中文写法
+- relationship state / repeat 词表现在也开始覆盖 `重修旧好`、`撕破脸` 这类常见关系表达，继续补齐 reconciled / ruptured 的常见中文写法
+- relationship state / repeat 词表现在也开始覆盖 `一笑泯恩仇`、`反目成仇` 这类常见关系表达，并处理 `反目` 前缀长短词的命中顺序
+- relationship state / repeat 词表现在也开始覆盖 `化干戈为玉帛`、`撕破脸皮` 这类常见关系表达，并处理 `撕破脸` 前缀长短词的命中顺序
+- relationship state / repeat 词表现在也开始覆盖 `尽释前嫌`、`反目为仇` 这类常见关系表达，并继续补齐 `反目*` 前缀长短词的命中顺序
 - conflict 侧成对出现的 `timeline / outline` 章节改写说明，现已开始收敛成跨域 `story-beat:*` token，减少不同子组之间重复的 scene/event 文案
 - conflict 侧 `constraints:rewrite-cutoff + story-beat:carry-forward`，现已开始收敛成跨域 `cutoff-resolution:carry-forward`
 - conflict 侧 `timeline / outline` 章节改写直写路径，现已开始收敛成跨域 `delay-resolution:rewrite-chapter`
@@ -129,6 +151,19 @@
 - 如果 `prior-exception` 当前不需要继续动 timeline / outline，grouped summary 现在会继续收紧成 `annotate-existing-exception-record / annotate-existing-rule-note`，明确这轮只补 canon / constraints 注释
 - 对 `prior-exception + local-signal`，如果这轮没有可落地的 `event_id / scene_id`，grouped summary 现在会优先收敛到 `review-exception-evidence`，不再误带 `review-exception-chain`
 - 对 `prior-exception + local-signal`，如果别的主体只出现在主体窗口外，grouped summary 现在仍保持 `review-exception-evidence`；只有主体窗口内已经混进别的主体时，才会额外升级到 `review-subject-scope`
+- 对 `prior-exception + local-signal`，如果句子先提到别的主体、但在知识谓词前又重新落回规则主体，consistency 现在会继续保持 `shared-subject`，不再误升成 `mixed-subjects`
+- 对 `prior-exception + local-signal`，如果别的主体出现在知识谓词后、并自己带第二个 knowledge verb，consistency 现在也会稳定升级成 `mixed-subjects`
+- 对 `prior-exception + local-signal`，如果别的主体出现在知识谓词后、但后续 knowledge verb 前又重新落回规则主体，consistency 现在也会继续保持 `shared-subject`
+- 对 `claim-match`，如果另一个角色只是旁观出场、但自己附近没有 knowledge signal，exception scope 现在也会继续保持 `shared-subject`，不再仅凭 `character_mentions` 误升成 `split-subjects`
+- 对 `claim-match`，如果中间只是提到别的角色、后面又回到规则主体的第二个 knowledge verb，draft claim 抽取现在也不会再凭空造出那名角色的假 claim
+- 对 draft claim 抽取，像“林舟和苏岚都知道...”这类并列主体共用一个 knowledge verb 的句式，仍会继续稳定拆成多主体 claim，不会被窗口收紧误截断
+- 对 draft claim 抽取，像“林舟与阿岚知道...”这种别名参与的并列主体共享 knowledge verb，现也会继续稳定拆成 `林舟 / 苏岚` 两条 claim
+- 对 draft claim 抽取与 subject-scope 扫描，如果另一角色只有短 alias 或称谓，且这枚 token 只是嵌在“岚城 / 阿岚街 / 白狼营 / 白狼帮 / 白狼会 / 白狼令 / 白狼封阵术 / 持白狼封阵术 / 借白狼封阵术 / 操控白狼巨舰”这类地名、设定名词、组织名、机构名或物件/术式名里，consistency 现在也不会再把它误当主体命中，更不会因此截断规则主体窗口或凭空造出假 claim
+- 对 draft claim 抽取，如果规则主体只是“意识到 / 知道 / 发现”另一个角色已经知情，后面的嵌套 knowledge 子句现在也不会再反向污染规则主体本人，不会再把“林舟意识到苏岚知道...”误抽成林舟直接知道该事实
+- 对 draft claim 抽取，如果外层只是“怀疑 / 猜测 / 听说 / 觉得 / 担心”另一个角色已经知情，内层 knowledge 子句现在也不会再被当成该角色已被正式证实的 direct claim，不会再把“林舟怀疑白狼知道...”误报成白狼真的知道
+- 对 draft claim 抽取，如果 speculative 外层和内层主体之间只插了“那个 / 这名 / 那位”这类指代修饰，内层 knowledge 子句现在也仍会继续被视为未证实，不会再把“林舟怀疑那个白狼知道...”误报成白狼真的知道
+- 对 draft claim 抽取，如果 speculative 外层和内层主体之间再夹着“那时 / 当时 / 第七章 / 在”这类时间或章节 filler，内层 knowledge 子句现在也仍会继续被视为未证实，不会再把“林舟怀疑那时那个白狼知道...”误报成白狼真的知道
+- 对 draft claim 抽取，如果外层只是“据说 / 传闻 / 听闻”这类更弱的传闻前缀，内层 knowledge 子句现在也仍会继续被视为未证实，不会再把“据说那时那个白狼知道...”误报成白狼真的知道
 - `same-chapter exemption` 的 review case 现在也开始补 `timeline:review-same-chapter-beat` / `outline:review-same-chapter-scene`，并和 `evidence-only / review-subject-scope` 规则保持一致
 - 如果同一条 idea 同时还有 `world-rule conflict`，grouped summary 现在会先提一条 `shared-world-rule-context`，把 conflict 行和 exemption 行共同拥有的 `domains / targets` 上提
 - 多条 exemption rule 共享同一批 review token 时，grouped summary 现在会先提一条 `shared-exemption-review`，把公共 `review_impacts / review_write_shapes / targets` 上提，减少逐条重复
@@ -137,6 +172,7 @@
 - 如果这类 `claim-match` 叙事型 case 同时落在 `split-subjects / mixed-subjects`，grouped summary 现在会退回 `annotate-existing-rule-note + review-subject-scope`，不再默认共用 exception chain
 - world-rule 相关的 canon explainer 开始引用各自命中的 claim，而不是回退到第一条 claim
 - 多条 rule 共享同一事件/场景写入时，重复的 timeline / outline explainers 开始做去重收敛
+- conflict / exemption 的逐条 rule 行开始省掉和 `direct_/review_` 完全重合的 `impacts=` / `write_shapes=`，减少 grouped summary 明细噪音
 - report 级结构化 `patch_suggestions`
 - 对后文“再次意识到 / 已经知道”类复述记录的豁免
 - relationship-history 对未来重复状态的图谱级豁免
@@ -203,6 +239,12 @@
 - 更明确的 skill 与 script 边界
 - 更完整的 demo / case workspace / 文档闭环
 
+当前最值得继续推进的，不再是继续堆顶层 grouped summary 压缩，而是：
+
+- 更细的 `knowledge-state / world-rule` claim 提取边界
+- 更少误报的 `subject-scope / mixed-subject` 判定
+- 以及把这些边界稳定沉到可测试的脚本规则里
+
 ## 最近完成
 
 - 为 intake 增加结构化 draft 层
@@ -251,6 +293,18 @@
 - 细化 `local-signal` 多主体边界：如果别的主体只出现在窗口外，grouped summary 继续只做 evidence review；只有窗口内混主体时才升级 subject-scope review
 - 收敛 `same-chapter` 说明层：同章 exemption 的 grouped summary 已开始和 `prior-exception` 共用同一套 evidence / subject-scope / timeline-outline review 规则
 - 收敛 grouped summary 噪音：多条 exemption 的公共 review token 已开始集中上提，不再在每条 rule 行里重复展开
+- 收敛 rule-line 噪音：如果 `impacts=` / `write_shapes=` 只是 `direct_/review_` 的并集，明细行现在直接省掉泛化字段，避免同一 token 同行重复
+- 收敛 exemption shared-line 噪音：`shared-exemption-review` 现在不再重复 `shared-exemption-base` 已经承载的 `domains / targets / reuse-exception` 公共项
+- 收敛 exemption scope 噪音：多条 `reuse-existing-exception` 行里重复的 `subject_scope / exception_scope_*` 现在会先上提到 `shared-exemption-scope`
+- 收敛 exemption rule-token 噪音：多条 `reuse-existing-exception` 行里重复的 `direct / review / subjects` 现在会先上提到 `shared-exemption-rule-tokens`
+- 收敛 exemption 壳行噪音：如果若干 exemption 行只剩 exception id，grouped summary 现在会改成一条 `shared-exemption-links`
+- 收紧 exception 选取边界：同一 rule 命中多条 exception 时，现在会优先选最贴近当前 draft chapter 的匹配记录，不再按存储顺序误选更早链路
+- 收紧 relationship repeat 词表边界：`再度` 现在也会触发 future repeat after transition 的豁免，不再只识别 `重新 / 再次 / 又`
+- 收紧 relationship 语义词表边界：`重归于好` 现在会同时触发 `reconciled` 状态与 repeat hint，`反目` 现在会映射到 `ruptured`
+- 收紧 relationship 语义词表边界：`冰释前嫌` 现在也会同时触发 `reconciled` 状态与 repeat hint，`翻脸` 现在会映射到 `ruptured`
+- 收紧 relationship 语义词表边界：`破镜重圆` 现在也会同时触发 `reconciled` 状态与 repeat hint，`闹翻` 现在会映射到 `ruptured`
+- 收紧 relationship 语义词表边界：`言归于好` 现在也会同时触发 `reconciled` 状态与 repeat hint，`彻底翻脸` 现在会映射到 `ruptured`
+- 收紧 relationship 语义词表边界：`握手言和` 现在也会同时触发 `reconciled` 状态与 repeat hint，`恩断义绝` 现在会映射到 `ruptured`
 - 细化 `claim-match` 注释边界：叙事型 idea 在无 event / scene targets 时，grouped summary 已开始保留 `carry-forward`，而纯设定型则继续只走 `annotate`
 - 收紧多主体 `claim-match` 边界：叙事型 idea 在 `split-subjects / mixed-subjects` 下，grouped summary 已开始从 `carry-forward` 退回 `annotate + review-subject-scope`
 - 收紧同章锚点边界：如果当前 chapter 已经有正式的 knowledge-state / relationship 记录，future duplicate 不再反向把 idea 报成前移或漂移

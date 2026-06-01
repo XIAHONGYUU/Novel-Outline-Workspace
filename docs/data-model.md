@@ -177,6 +177,48 @@
 - `exception_match_mode`
   例如 `claim-match`、`local-signal`
 
+如果多条 exemption 共享同一批 scope 元信息，当前 constraints grouped summary 还可能再提一条：
+
+- `shared-exemption-scope`
+
+这条共享行通常承载：
+
+- `rules=...`
+- `subject_scope=...`
+- `exception_scope=...`
+- `exception_scope_base=...`
+- `exception_subject_scope=...`
+- `exception_match_mode=...`
+
+也就是把多条 `reuse-existing-exception` 行里重复出现的 scope 元信息先上提，
+而各自的 `rule-xxx:` 行只再保留不共享的 scope 字段。
+
+如果多条 exemption 共享同一批非 scope 的 rule 元信息，当前 constraints grouped summary 还可能再提一条：
+
+- `shared-exemption-rule-tokens`
+
+这条共享行通常承载：
+
+- `rules=...`
+- `direct=...`
+- `review=...`
+- `subjects=...`
+
+也就是把多条 `reuse-existing-exception` 行里重复出现的 rule 元信息先上提，
+而各自的 `rule-xxx:` 行只再保留不共享的 `direct / review / subjects` 字段。
+
+如果若干 exemption 行在扣掉这些共享 token 之后只剩下 exception id 映射，
+当前 constraints grouped summary 还可能再提一条：
+
+- `shared-exemption-links`
+
+这条共享行通常承载：
+
+- `pairs=rule-xxx:exception-id, ...`
+
+也就是把“只剩 `exceptions=` 的壳行”收成一条 rule->exception 的映射行，
+而不再保留多条只差 exception id 的 `rule-xxx:` 行。
+
 如果一条 idea 同时命中多条 `world-rule conflict`，且这些冲突共享同一批 context，
 当前 constraints grouped summary 还可能先提一条：
 
@@ -240,6 +282,104 @@
 也就是只把重复的结构字段单独上提，而把各自不同的 `strategies / subjects`
 继续留在对应的 `rule-xxx:` 行里。
 
+如果同一批 mixed conflict 子组同时共享 `direct/override/subject_scope`
+以及 `strategies/subjects + domains/targets`，当前 constraints grouped summary
+还可能直接收成一条：
+
+- `shared-conflict-rule-metadata`
+
+这条共享行通常承载：
+
+- `rules=...`
+- `direct=...`
+- `override=...`
+- `subject_scope=...`
+- `strategies=...`
+- `subjects=...`
+- `domains=...`
+- `targets=...`
+
+也就是把原本分成 `shared-conflict-structure-tokens` 和
+`shared-conflict-rule-details` 的局部描述再合成一条。
+
+如果同一批 mixed conflict 子组同时共享 `shared-conflict-rule-metadata`
+以及 `direct/review impacts + direct/review write_shapes`，当前 constraints grouped summary
+还可能再进一步收成一条：
+
+- `shared-conflict-rule-summary`
+
+这条共享行通常承载：
+
+- `rules=...`
+- `direct=...`
+- `override=...`
+- `subject_scope=...`
+- `strategies=...`
+- `subjects=...`
+- `domains=...`
+- `targets=...`
+- `direct_impacts=...`
+- `review_impacts=...`
+- `direct_write_shapes=...`
+- `review_write_shapes=...`
+
+也就是把原本分成 `shared-conflict-rule-metadata` 和
+`shared-conflict-rule-actions` 的局部 summary 再合成一条。
+
+如果当前批次的 conflict rule 还共享同一批顶层 `domains / targets`，
+并且也共享同一批顶层 `impacts / write_shapes`，当前 constraints grouped summary
+还可能把原本分开的：
+
+- `shared-conflict-context`
+- `shared-conflict-actions`
+
+直接合成一条：
+
+- `shared-conflict-summary`
+
+这条共享行通常承载：
+
+- `domains=...`
+- `targets=...`
+- `impacts=...`
+- `direct_impacts=...`
+- `review_impacts=...`
+- `write_shapes=...`
+- `direct_write_shapes=...`
+- `review_write_shapes=...`
+
+也就是把全局 conflict context 和全局 conflict actions 收成一条顶层 summary。
+
+如果这条顶层 `shared-conflict-summary` 对应的 conflict rule 同时也共享同一套
+`strategies / direct / override / subjects / subject_scope` 结构签名，当前
+constraints grouped summary 还可能再把：
+
+- `shared-conflict-summary`
+- `shared-conflict-structure`
+
+继续合成一条：
+
+- `shared-conflict-overview`
+
+这条共享行通常承载：
+
+- `rules=...`
+- `strategies=...`
+- `direct=...`
+- `override=...`
+- `subjects=...`
+- `subject_scope=...`
+- `domains=...`
+- `targets=...`
+- `impacts=...`
+- `direct_impacts=...`
+- `review_impacts=...`
+- `write_shapes=...`
+- `direct_write_shapes=...`
+- `review_write_shapes=...`
+
+也就是把顶层 conflict summary 和“全部 rule 共享的一条结构行”再收成一条 overview。
+
 如果 mixed conflict 子组里 `strategies / subjects` 也还有局部重复，
 当前 constraints grouped summary 还可能再提一条：
 
@@ -253,6 +393,22 @@
 
 也就是只把重复的 rule 标签字段单独上提，而把各自仍不同的部分继续留在
 对应的 `rule-xxx:` 行里。
+
+如果同一批 mixed conflict 子组同时共享 `strategies/subjects` 和
+`domains/targets`，当前 constraints grouped summary 还可能直接收成一条：
+
+- `shared-conflict-rule-details`
+
+这条共享行通常承载：
+
+- `rules=...`
+- `strategies=...`
+- `subjects=...`
+- `domains=...`
+- `targets=...`
+
+也就是把原本分成 `shared-conflict-rule-tokens` 和
+`shared-conflict-rule-context` 的局部共享描述合成一条。
 
 如果 mixed conflict 子组里 `domains / targets` 也还有局部重复，
 当前 constraints grouped summary 还可能再提一条：
@@ -281,6 +437,22 @@
 
 也就是只把重复的 rule 级 impact 字段单独上提，而把各自仍不同的部分继续留在
 对应的 `rule-xxx:` 行里。
+
+如果同一批 mixed conflict 子组同时共享 `direct/review impacts` 和
+`direct/review write_shapes`，当前 constraints grouped summary 还可能直接收成一条：
+
+- `shared-conflict-rule-actions`
+
+这条共享行通常承载：
+
+- `rules=...`
+- `direct_impacts=...`
+- `review_impacts=...`
+- `direct_write_shapes=...`
+- `review_write_shapes=...`
+
+也就是把原本两条分别承载 impacts / write_shapes 的局部共享 action 行合成一条，
+避免连续重复同一组 `rules=...`。
 
 如果不同 conflict 子组虽然整体动作签名不同，但共享同一批写入形态，
 当前 constraints grouped summary 还可能再提一条：
@@ -447,6 +619,16 @@
 - `domains`
 
 而不会重复承载已经属于 `shared-exemption-review` 的 review 专属 token。
+
+同样地，`shared-exemption-scope` 也只负责 exemption 的 scope 元信息，
+不会重复承载已经属于 `shared-exemption-base` / `shared-exemption-review`
+的 impact、write-shape 或 target token。
+
+`shared-exemption-rule-tokens` 也遵循同样原则：
+它只负责 exemption 的 rule 元信息，不承载 scope、impact 或 write-shape token。
+
+`shared-exemption-links` 也只负责 rule 与 exception id 的映射，
+只有在对应 rule 行已经没有其余剩余 token 时才会出现。
 
 如果同一条 idea 同时还有 `world-rule conflict`，当前 constraints grouped summary 还可能再提一条：
 

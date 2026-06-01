@@ -1299,3 +1299,781 @@
 - 让 `knowledge-state` 不再只依赖 timeline / outline 的文本命中
 - 让 world-rule 例外不再只是 constraints 里的备注，而是可回流的机器事实
 - 先把 canon 真相源固定，再继续细化图谱推理和例外边界
+
+---
+
+## 2026-05-24
+
+### 决策：逐条 world-rule explainer 不再重复输出泛化 `impacts=` / `write_shapes=`
+
+当前状态：
+
+- `shared-conflict-actions` 这一层已经会把和 `direct_/review_` 桶完全重合的 `impacts=` / `write_shapes=` 扣掉
+- 但逐条 `rule-xxx:` 明细行，以及 exemption 的 `reuse-existing-exception` 明细行，之前仍可能同时输出：
+  `impacts=...` + `direct_impacts=...` / `review_impacts=...`
+- `write_shapes=` 也有同样问题，导致同一个 token 在同一行里重复两次
+
+因此这轮把同样的去重规则下沉到 rule 行本身：
+
+- 如果某条 rule 行里的 `impacts=` 只是 `direct_impacts` 与 `review_impacts` 的并集，就不再输出这层泛化字段
+- 如果某条 rule 行里的 `write_shapes=` 只是 `direct_write_shapes` 与 `review_write_shapes` 的并集，也不再输出这层泛化字段
+- 这个规则同时应用到 conflict rule 行和 exemption rule 行
+
+原因：
+
+- grouped summary 的目标是压缩噪音，不应该在明细层把同一 token 再写一遍
+- 这样生成出来的 plan diff 会更稳定，人工扫 `rule-xxx:` 时也更容易直接看到“哪些是 direct、哪些是 review”
+- 不改数据模型，只继续收紧现有 explainer 的表达层
+
+---
+
+## 2026-05-24
+
+### 决策：`shared-exemption-review` 不再重复 `shared-exemption-base` 已覆盖的公共 token
+
+当前状态：
+
+- `shared-exemption-base` 已经负责 direct / review 混排 exemption 里的公共 `domains / impacts / targets`
+- `shared-exemption-review` 负责多条 review exemption 共享的 review token
+- 但在“1 条 direct + 多条 review”混排时，`shared-exemption-review` 之前仍会把
+  `canon:reuse-exception / constraints:reuse-exception` 以及同一批 `domains / targets`
+  再写一遍
+
+因此这轮把 review 共享行也对齐到“先扣 base、再输出 review 专属”的规则：
+
+- `shared-exemption-review` 输出前，先减掉 `shared-exemption-base` 已经覆盖的
+  `domains / targets / impacts / write_shapes`
+- 只保留 review 专属补充，例如
+  `canon:review-exception-continuity / constraints:review-exception-chain`
+
+原因：
+
+- 这样 `shared-exemption-base` 和 `shared-exemption-review` 的职责边界才真正稳定
+- 混排 case 的 grouped summary 不会再把同一批公共 token 写两次
+- 仍然不改数据结构，只收紧 explainers 的去重逻辑
+
+---
+
+## 2026-05-24
+
+### 决策：多条 exemption 共用同一批 scope 元信息时，先上提 `shared-exemption-scope`
+
+当前状态：
+
+- `shared-exemption-base` 已经负责公共 `domains / targets / reuse-exception impacts`
+- `shared-exemption-review` 已经负责公共 `review_impacts / review_write_shapes`
+- 但多条 `reuse-existing-exception` 行里，`subject_scope / exception_scope / exception_scope_base / exception_subject_scope / exception_match_mode`
+  这批 scope 元信息之前仍会逐条重复
+
+因此这轮再补一条更窄的 scope 共享行：
+
+- 当多条 exemption 共享同一批 scope 元信息时，先提一条 `shared-exemption-scope`
+- 这条行按 `rules=...` 标记它覆盖的 exemption 子集
+- 对应的 `rule-xxx: reuse-existing-exception` 行再扣掉这些已共享的 scope token
+
+原因：
+
+- 这样 exemption 侧的“base / review / scope”三层职责会更清楚
+- mixed-subject / prior-exception / same-chapter 混排时，规则行能更快暴露真正不同的部分
+- 仍然不改数据结构，只继续压缩 grouped summary 的重复元信息
+
+---
+
+## 2026-05-24
+
+### 决策：多条 exemption 共用同一批 rule 元信息时，先上提 `shared-exemption-rule-tokens`
+
+当前状态：
+
+- `shared-exemption-scope` 已经能把重复的 `subject_scope / exception_scope_*` 上提
+- 但多条 `reuse-existing-exception` 行里，`direct / review / subjects` 这批 rule 元信息仍可能逐条重复
+
+因此这轮再补一条更轻的 rule-token 共享行：
+
+- 当多条 exemption 共享同一批 `direct / review / subjects` 时，先提一条 `shared-exemption-rule-tokens`
+- 这条行按 `rules=...` 标记它覆盖的 exemption 子集
+- 对应的 `rule-xxx: reuse-existing-exception` 行再扣掉这些已共享的 rule token
+
+原因：
+
+- 让 exemption 侧的规则行更快收敛到“exception id + 真正差异字段”
+- 不和 `shared-exemption-scope`、`shared-exemption-base`、`shared-exemption-review` 混职责
+- 仍然不改数据结构，只继续压缩 grouped summary 的重复 rule 元信息
+
+---
+
+## 2026-05-24
+
+### 决策：只剩 exception id 的 exemption 壳行收成 `shared-exemption-links`
+
+当前状态：
+
+- `shared-exemption-scope` 和 `shared-exemption-rule-tokens` 已经能把大部分重复元信息上提
+- 某些 mixed exemption case 下，部分 `rule-xxx: reuse-existing-exception` 行扣掉这些共享 token 后，只会剩 `exceptions=...`
+- 继续保留这类行，信息增量已经很低，只是在逐条重复 `rule-xxx:` 壳子
+
+因此这轮再补一条更窄的映射行：
+
+- 当至少两条 exemption 行在扣掉共享 token 后只剩 `exceptions=...`，且当前同组里仍有别的 richer exemption 行需要单独保留时，
+  先提一条 `shared-exemption-links`
+- 这条行承载 `rule_id -> exception_id` 的映射
+- 对应的壳行不再单独输出
+
+原因：
+
+- 这样仍保留 rule 和 matched exception 的对应关系
+- 但能去掉多条只差 exception id 的空壳行
+- 继续维持“shared 行负责公共结构，rule 行负责剩余差异”的输出原则
+
+---
+
+## 2026-05-24
+
+### 决策：多条匹配 exception 并存时，优先选最贴近当前 chapter 的那条
+
+当前状态：
+
+- `world_rule_exceptions[]` 允许同一 rule 在不同 chapter 留下多条正式 exception
+- 之前 `_matching_world_rule_exception()` 只要命中就按存储顺序返回第一条
+- 这会让“更早的 prior exception 写在前面、当前章 same-chapter exception 写在后面”的 case
+  被误选成 prior exception，进而把本来可 direct 的 merge plan 降成 review
+
+因此这轮把 exception 选择策略收紧成“更贴近当前 draft chapter 的优先”：
+
+- 在多个 exception 都匹配同一 rule / subject / object 时，先优先当前章 same-chapter
+- 否则再退回更早的 prior exception
+- 如果都是 earlier match，则优先 chapter 更接近当前 draft 的那条
+
+原因：
+
+- 这更符合 exception chain 的语义：当前章已有正式例外时，不应再回退到更早的链路节点
+- consistency report 和 merge plan 的 direct/review 判定会更稳定
+- 这是规则边界修正，不改数据结构
+
+---
+
+## 2026-05-24
+
+### 决策：relationship repeat hint 补充 `再度`
+
+当前状态：
+
+- future relationship repeat after transition 的豁免目前依赖重复提示词
+- 现有词表已经覆盖 `重新 / 再次 / 又`
+- 但中文大纲里也常见 `再度结盟 / 再度和解` 这类表达，之前不会命中 repeat hint
+
+因此这轮先补一个保守词表扩展：
+
+- 把 `再度` 加进 `RELATIONSHIP_REPEAT_TOKENS`
+
+原因：
+
+- 这类 wording 和 `再次` 的语义足够接近，适合直接走同一确定性规则
+- 能减少 relationship-history 在“有中间状态转移、且未来同状态已落地”场景下的误报
+- 这是边界扩展，不改数据结构，也不改变原有 repeat-hint 机制
+
+---
+
+## 2026-05-24
+
+### 决策：relationship 词表补充 `重归于好 / 反目`
+
+当前状态：
+
+- relationship-history 目前主要靠少量稳定 token 映射关系状态
+- `和解 / 决裂` 已能工作
+- 但中文大纲里也很常见 `重归于好`、`反目` 这类表达，之前不会命中对应状态
+
+因此这轮补一个保守的同义词扩展：
+
+- `重归于好 -> reconciled`
+- `反目 -> ruptured`
+- 同时把 `重归于好` 也纳入 relationship repeat hint，因为它天然带有“重新恢复关系”的语义
+
+原因：
+
+- 这两类表达在角色关系 beat 里足够高频
+- 它们能直接复用现有 `relationship-history` 状态机，不需要引入更复杂的 NLP
+- 这是词表边界扩展，不改数据结构
+
+---
+
+## 2026-05-24
+
+### 决策：relationship 词表继续补充 `冰释前嫌 / 翻脸`
+
+当前状态：
+
+- `重归于好 / 反目` 已经接入 relationship 状态词表
+- 但中文大纲里也很常见 `冰释前嫌`、`翻脸` 这类表达
+- 其中 `冰释前嫌` 和 `重归于好` 一样，除了是 `reconciled` 状态，本身也带有 repeat/restart 的语义
+
+因此这轮继续做一层保守扩展：
+
+- `冰释前嫌 -> reconciled`
+- `翻脸 -> ruptured`
+- 同时把 `冰释前嫌` 纳入 relationship repeat hint
+
+原因：
+
+- 这是对现有 reconciled / ruptured 词表的直接补全
+- 能继续减少 relationship-history 在常见中文写法上的漏判与误报
+- 仍然只是词表边界扩展，不改数据结构
+
+---
+
+## 2026-05-24
+
+### 决策：relationship 词表继续补充 `破镜重圆 / 闹翻`
+
+当前状态：
+
+- `冰释前嫌 / 翻脸` 已经接入 relationship 词表
+- 但中文大纲里同样高频的还有 `破镜重圆`、`闹翻`
+- `破镜重圆` 与 `重归于好 / 冰释前嫌` 一样，也自带“关系重新修复”的语义
+
+因此这轮继续做一层保守扩展：
+
+- `破镜重圆 -> reconciled`
+- `闹翻 -> ruptured`
+- 同时把 `破镜重圆` 纳入 relationship repeat hint
+
+原因：
+
+- 继续沿现有 reconciled / ruptured 状态机补齐高频中文写法
+- 能再压掉一批 relationship-history 的漏判与误报
+- 仍然只是词表边界扩展，不改数据结构
+
+---
+
+## 2026-05-27
+
+### 决策：speculative 外层和内层主体之间夹着指代修饰时，仍不能把内层 `知道...` 提升成 direct claim
+
+当前状态：
+
+- 前一轮已经拦掉了 `怀疑 / 猜测 / 听说 / 觉得 / 担心` 直接包住另一主体的 case
+- 但中文大纲里也很常见“怀疑那个白狼知道…”、“觉得这位议长已经知情”这类写法
+- 如果只按主体前紧邻文本判断，`那个 / 这名 / 那位` 会把 speculative 前缀隔开，重新让系统把内层 `知道...` 当成已证实 claim
+
+因此这轮继续做一层保守收紧：
+
+- speculative subject 检查现在会剥掉 `那个 / 这个 / 那名 / 这名 / 那位 / 这位` 这类短指代修饰
+- 这样“林舟怀疑那个白狼知道组织首领是谁”仍会保持为未证实，不会再生成白狼已知情的 direct claim
+
+原因：
+
+- 这类指代修饰只是在描述口气上补一个限定，不会改变外层仍是怀疑/传闻的事实
+- 如果不拦，machine fact 会把未证实猜测升级成已证实知识，污染 `knowledge_claims` 和后续 world-rule conflict
+- 仍然只是 claim 抽取边界收紧，不改数据结构
+
+### 决策：speculative 外层和内层主体之间夹着时间/章节 filler 时，仍不能把内层 `知道...` 提升成 direct claim
+
+当前状态：
+
+- 上一轮已经拦掉了 speculative 前缀和主体之间只夹着“那个 / 这名 / 那位”这类指代修饰的 case
+- 但中文大纲里也常见“怀疑那时那个白狼知道…”、“听说在第七章白狼已经知情”这类写法
+- 如果 helper 只剥指代词，这些时间/章节 filler 会把 speculative 前缀再次隔开，重新让系统把内层 `知道...` 当成已证实 claim
+
+因此这轮继续做一层保守收紧：
+
+- speculative subject 检查现在会继续剥掉 `那时 / 这时 / 当时 / 当天 / 那晚 / 此刻` 这类短时间 filler
+- 如果主体前是 `在第七章 / 于第十章` 这类章节提示，也会先剥掉章节 token，再清掉残留的 `在 / 于`
+- 这样“林舟怀疑那时那个白狼知道组织首领是谁”仍会保持为未证实，不会再生成白狼已知情的 direct claim
+
+原因：
+
+- 这类时间/章节 filler 只是在补语境，不会改变外层仍是怀疑/传闻的事实性质
+- 如果不拦，claim 抽取会再次把未证实的传闻升级成 machine fact，污染 `knowledge_claims` 和 world-rule conflict
+- 仍然只是 claim 抽取边界收紧，不改数据结构
+
+### 决策：`据说 / 传闻 / 听闻` 这类更弱传闻前缀，也不能把内层 `知道...` 提升成 direct claim
+
+当前状态：
+
+- 前几轮已经拦掉了 `怀疑 / 猜测 / 听说 / 觉得 / 担心` 这批更显式的主观判断或传闻前缀
+- 但中文大纲里也常出现更弱的“据说那时那个白狼知道…”、“传闻白狼已经知情”、“林舟听闻白狼知道内情”
+- 如果词表只覆盖前一批显式前缀，这些更弱 rumor prefix 仍会让系统把内层 `知道...` 当成已证实 claim
+
+因此这轮继续做一层保守扩展：
+
+- speculative prefix 词表现在补进 `据说 / 传闻 / 听闻`
+- 这样“据说那时那个白狼知道组织首领是谁”也会继续保持为未证实，不会再生成白狼已知情的 direct claim
+
+原因：
+
+- 这类前缀表达的仍然是传闻、转述或非证实信息，而不是可直接落入 machine fact 的事实陈述
+- 如果不拦，`knowledge_claims` 会把 rumor 升级成 direct knowledge，后续 world-rule conflict 也会被污染
+- 仍然只是 claim 抽取边界收紧，不改数据结构
+
+---
+
+## 2026-05-25
+
+### 决策：`prior-exception + local-signal` 只有在别的主体真正占到知识谓词时才升 `mixed-subjects`
+
+当前状态：
+
+- `prior-exception + local-signal` 已经会按主体窗口区分 `shared-subject` 和 `mixed-subjects`
+- 但像“林舟和苏岚对视时，林舟知道组织首领是谁”这种句式
+- 别的主体虽然先出现在同一句里，知识谓词前却又重新落回规则主体
+
+因此这轮把 local-signal 的 mixed-subject 判定再收紧一层：
+
+- 如果别的主体只是在前置铺垫里出现
+- 但知识谓词前又重新出现了规则主体
+- 那这条 exception 继续按 `shared-subject` 处理，而不是升级成 `mixed-subjects`
+- 如果别的主体出现在知识谓词后，并且自己又带出第二个 knowledge verb
+- 那这条 exception 仍按 `mixed-subjects` 处理，不会被前面的单主体谓词误降回 `shared-subject`
+- 如果别的主体出现在知识谓词后，但后续 knowledge verb 前又重新出现了规则主体
+- 那这条 exception 继续按 `shared-subject` 处理，不会因为窗口放宽而被误升成 `mixed-subjects`
+- 对 `claim-match`，如果另一个角色只是旁观出场、但自己附近没有 knowledge signal
+- 那这条 exception 也继续按 `shared-subject` 处理，不再仅凭 `character_mentions` 就升成 `split-subjects`
+- 如果中间只是提到别的角色，但后面重新回到规则主体并带出第二个 knowledge verb
+- 那 draft claim 抽取也不能把后面的规则主体谓词错误归到这个中间角色头上
+- 但像“林舟和苏岚都知道...”这种并列主体共用一个 knowledge verb 的句式
+- 仍要继续允许两个主体共同吃到这条 knowledge 谓词，不能因为窗口收紧把前一个主体截断掉
+- 这也包括别名参与的并列主语，例如“林舟与阿岚知道...”
+- 抽取结果仍应稳定回到 canonical subject `林舟 / 苏岚`
+
+原因：
+
+- 这类句子表达的是“同场出现”，不是“多主体共享同一条知情变化”
+- 继续保守地把它打成 mixed 会平白引入 `review-subject-scope`
+- 这条收紧只影响 local-signal 边界，不改 claim-match；同时保留真正多主体 knowledge 谓词 case 的 mixed review
+
+---
+
+## 2026-05-25
+
+### 决策：一字 alias 只有在像主体出现时，才能参与 knowledge claim / subject-scope 命中
+
+当前状态：
+
+- draft claim 抽取已经能处理“林舟与阿岚知道...”这类别名参与的并列主语
+- 但如果另一角色还带一字 alias，例如 `苏岚 -> 岚`
+- 那么“林舟在岚城知道组织首领是谁，苏岚随后赶到”这类句子里
+- `岚城` 里的 `岚` 会被误当成主体命中
+
+因此这轮把 subject term 命中再收紧一层：
+
+- 对多字姓名 / 别名，继续沿用当前宽松匹配
+- 对一字 alias，只有当前后文看起来像主体出现时，才允许把它当成有效 subject hit
+- 像 `岚城`、`岚桥` 这类地名 / 名词里的嵌入命中，不再参与主体窗口截断
+- 这样既不会截断规则主体自己的 knowledge verb 窗口
+- 也不会给一字 alias 所属角色凭空造出假的 knowledge claim
+- 同一层收紧也复用于 `local-signal / claim-match` 的 subject-scope 扫描
+
+原因：
+
+- 一字 alias 在中文地名、物名里非常容易发生子串误命中
+- 这类误命中同时会污染 claim 抽取和 mixed-subject 判定，影响面比单条 wording 漏判更大
+- 先把一字 alias 收紧成“像主体时才算主体”，收益高且不需要改数据结构
+
+---
+
+## 2026-05-25
+
+### 决策：短 alias / 称谓如果只是嵌在地名、设定名词、组织名或机构名里，也不能算主体命中
+
+当前状态：
+
+- 上一轮已经把一字 alias 收紧成“像主体时才算主体”
+- 但更长一点的 alias / 称谓，例如 `阿岚`、`白狼`、`师姐`
+- 仍可能在 `阿岚街 / 白狼谷 / 师姐峰 / 白狼营 / 白狼帮 / 白狼会` 这类地名、设定名词、组织名或机构名里误命中
+
+因此这轮再补一层轻量过滤：
+
+- 如果 alias / 称谓后面直接连的是典型地名、设定名词、组织名或机构名后缀
+- 那这次命中不再参与 subject hit
+- 它既不能截断规则主体自己的 knowledge 窗口
+- 也不能给对应角色凭空造出 claim
+- 这层过滤继续复用到 `claim-match / local-signal` 的 subject-scope 扫描
+
+原因：
+
+- 多字 alias 的误命中模式和一字 alias 本质相同，只是前一轮规则还没覆盖到
+- 这类后缀过滤比给所有多字姓名都上重语法判断更稳，风险更低
+- 先挡住地名/设定名词/组织名/机构名嵌入命中，已经能覆盖一批高频中文写法
+
+---
+
+## 2026-05-27
+
+### 决策：嵌套 knowledge 子句不能反向污染规则主体的 direct claim
+
+当前状态：
+
+- 前一轮已经把短 alias / 称谓嵌在复合名词里的假主体命中压下来了
+- 但像“林舟意识到苏岚知道组织首领是谁”这种句式里
+- 规则主体后面虽然跟着 knowledge verb
+- 真正持有核心事实的却是后面的第二主体
+
+因此这轮继续收紧一层：
+
+- 如果第二主体后面直接带出自己的 knowledge 子句
+- 那这条嵌套 knowledge 不再回流成前一个主体的 direct claim
+- 也就是说“林舟意识到苏岚知道...”只保留苏岚那条 claim
+- 不再把林舟误判成也直接知道该世界规则对象
+
+原因：
+
+- 这类句子表达的是“知道别人已经知情”，不是“自己直接掌握该事实”
+- 如果不收紧，会在 world-rule 上平白制造错误 conflict / exemption
+- 这属于 claim 提取边界本身的问题，优先级高于继续压说明文案
+
+---
+
+## 2026-05-27
+
+### 决策：speculative 外层认知不能把内层 `知道...` 提升成已证实 direct claim
+
+当前状态：
+
+- 上一轮已经处理了“林舟意识到苏岚知道...”这类嵌套 knowledge 子句
+- 但像“林舟怀疑白狼知道组织首领是谁”“林舟听说白狼知道组织首领是谁”
+- 这类外层只是猜测、传闻或主观判断的句式
+- 仍会把内层主体误抽成已被证实知情
+
+因此这轮继续收紧一层：
+
+- 如果某个主体只是出现在 `怀疑 / 猜测 / 担心 / 听说 / 觉得 / 以为` 这类 speculative 外层动词之后
+- 那它后面的 `知道...` 子句不再自动落成 direct knowledge claim
+- 这样不会再平白制造该主体的 `world-rule conflict`
+- 也不会把“传闻中的知情”误升成正式 exception / conflict 输入
+
+原因：
+
+- 这类句子表达的是不确定判断，不是机器事实源可以直接采信的正式知情变化
+- 如果继续放行，会把 `knowledge-state / world-rule` 的误报拉高，而且难靠后续 merge 再修正
+- 先在 claim 抽取层挡住，收益高且副作用小
+
+---
+
+## 2026-05-27
+
+### 决策：短 alias / 称谓如果只是嵌在物件或术式名里，也不能算主体命中
+
+当前状态：
+
+- 前一轮已经把地名、设定名词、组织名、机构名里的嵌入命中压掉
+- 但像 `白狼令 / 白狼阵 / 白狼符 / 白狼舰 / 白狼封阵术`
+- 这类世界观物件、法器、阵法或术式名里
+- 角色 token 仍会被误当成主体
+- 进一步看，像 `持白狼封阵术 / 催动白狼大阵 / 施展白狼七杀号`
+- 这类动作前缀带出的复合术式名，也会绕过只看介词前缀的过滤
+- 再往下看，像 `借白狼封阵术 / 引动白狼封阵术 / 唤起白狼巨舰`
+- 这类更短或不同构式的动作前缀，也会落在同一个漏网点上
+- 另外像 `操控白狼巨舰 / 驾驭白狼大阵 / 运转白狼封阵术`
+- 这类更抽象的使用/操控前缀，也会把人物 token 错吸成主体
+
+因此这轮继续沿同一层过滤扩一格：
+
+- 如果 alias / 称谓后面直接连的是典型物件或术式后缀
+- 这次命中也不再参与 subject hit
+- 如果 alias / 称谓后面还有一小段修饰词，但整体仍落在介词引导的复合术式名里
+- 这次命中也继续按嵌入名词处理，不再等到紧邻字符就是后缀才拦
+- 如果 alias / 称谓前面是 `持 / 催动 / 施展 / 唤出 / 祭出` 这类动作前缀
+- 且后面仍连着复合物件 / 术式尾巴
+- 这次命中也继续按嵌入名词处理
+- 这也包括 `借 / 引动 / 唤起` 这类前缀，以及 `催动起 / 施展开` 这类动作词后再带一个轻补语字的变体
+- 也包括 `操控 / 驾驭 / 运转` 这类抽象操控前缀
+- 它不能截断规则主体自己的 knowledge 窗口
+- 也不能给对应角色凭空造出 claim
+- 这层过滤同样继续复用到 `claim-match / local-signal` 的 subject-scope 扫描
+
+原因：
+
+- 在偏玄幻、仙侠、奇幻设定里，人物 token 经常出现在令牌、阵法、兵器、法门名称里
+- 这类误命中和组织名误命中的机制相同，继续放着只会把 claim 级边界越拉越噪
+- 仍然只是扩大后缀过滤词表，不改数据结构
+
+---
+
+## 2026-05-25
+
+### 决策：当全部 conflict rule 共享同一结构签名时，把顶层 `shared-conflict-summary + shared-conflict-structure` 合成 `shared-conflict-overview`
+
+当前状态：
+
+- constraints grouped summary 顶层已经能把 `shared-conflict-context + shared-conflict-actions` 合成 `shared-conflict-summary`
+- 但当全部 conflict rule 还共享同一套 `strategies / direct / override / subjects / subject_scope`
+- 输出里仍会再紧跟一条覆盖全部 rule 的 `shared-conflict-structure`
+
+因此这轮继续做一层保守压缩：
+
+- 只在一条 `shared-conflict-structure` 覆盖全部 conflict rule 时
+- 再把这条结构行和顶层 `shared-conflict-summary` 合成一条 `shared-conflict-overview`
+- 同时省掉那条独立的全局 structure 行
+
+原因：
+
+- 这时 summary 和 structure 描述的是同一批全局 conflict，只是被拆成了两条相邻行
+- 约束条件很窄，不会影响 `rules=...` 的 subset 级 structure 行
+- 能继续减少顶层 explainer 的切换成本，让 overview 更接近“读一行就知道整体影响面”
+
+---
+
+## 2026-05-25
+
+### 决策：把顶层 `shared-conflict-context + shared-conflict-actions` 合成 `shared-conflict-summary`
+
+当前状态：
+
+- constraints grouped summary 顶层原本会分别输出 `shared-conflict-context` 和 `shared-conflict-actions`
+- 当当前批次的 conflict rule 共享同一批全局 `domains / targets`
+- 并且也共享同一批全局 `impacts / write_shapes` 时，这两条顶层行会紧挨着重复同一层范围
+
+因此这轮继续做一层保守压缩：
+
+- 只在全局 conflict context 和全局 conflict actions 同时存在时
+- 把原本拆开的 `shared-conflict-context + shared-conflict-actions` 合成一条 `shared-conflict-summary`
+- 这条 summary 同时承载 `domains / targets / impacts / write_shapes`
+
+原因：
+
+- 这时两条顶层行描述的是同一批全局 conflict 影响面，拆开只是在重复读者视线切换
+- 约束条件仍然很窄，不会影响 `rules=...` 子组级的局部 summary
+- 能继续减少 grouped summary 里的顶层噪音行数
+
+---
+
+## 2026-05-24
+
+### 决策：relationship 词表继续补充 `化干戈为玉帛 / 撕破脸皮`
+
+当前状态：
+
+- `一笑泯恩仇 / 反目成仇` 已经接入 relationship 词表
+- 但中文大纲里也很常见 `化干戈为玉帛`、`撕破脸皮`
+- `撕破脸皮` 和既有 `撕破脸` 共享前缀，如果不显式补长词并调整命中顺序，解释层会退化成较短 token
+
+因此这轮继续做一层保守扩展：
+
+- `化干戈为玉帛 -> reconciled`
+- `撕破脸皮 -> ruptured`
+- 同时把 `化干戈为玉帛` 纳入 relationship repeat hint
+
+原因：
+
+- 继续沿现有 reconciled / ruptured 状态机补齐高频中文写法
+- 顺手补齐长短词共享前缀时的 token 命中边界
+- 仍然只是词表边界扩展，不改数据结构
+
+---
+
+## 2026-05-24
+
+### 决策：relationship 词表继续补充 `尽释前嫌 / 反目为仇`
+
+当前状态：
+
+- `化干戈为玉帛 / 撕破脸皮` 已经接入 relationship 词表
+- 但中文大纲里也很常见 `尽释前嫌`、`反目为仇`
+- `反目为仇` 和既有 `反目 / 反目成仇` 共享前缀，如果不显式补长词并调整命中顺序，解释层会退化成较短 token
+
+因此这轮继续做一层保守扩展：
+
+- `尽释前嫌 -> reconciled`
+- `反目为仇 -> ruptured`
+- 同时把 `尽释前嫌` 纳入 relationship repeat hint
+
+原因：
+
+- 继续沿现有 reconciled / ruptured 状态机补齐高频中文写法
+- 继续补齐长短词共享前缀时的 token 命中边界
+- 仍然只是词表边界扩展，不改数据结构
+
+---
+
+## 2026-05-24
+
+### 决策：把同 support 的 conflict `rule-impacts + write-shapes` 合成 `shared-conflict-rule-actions`
+
+当前状态：
+
+- mixed conflict 子组已经能分别上提 `shared-conflict-rule-impacts` 和 `shared-conflict-write-shapes`
+- 但如果两者刚好命中同一批 `rules=...`，输出里会连续重复同一组 rule id
+- 这类重复并不提供新结构信息，只是在把同一组局部 action 拆成两行
+
+因此这轮继续做一层保守压缩：
+
+- 当同一批 conflict rule 同时共享 `direct/review impacts` 和 `direct/review write_shapes` 时
+- 不再分开输出两条局部共享行
+- 而是合成一条 `shared-conflict-rule-actions`
+
+原因：
+
+- 继续压缩 grouped summary 的局部重复 token
+- 不改变 merge 判定逻辑，只收紧 explainers 的表达层
+- 保留 `rules -> action fields` 的映射可读性，同时减少重复的 `rules=...`
+
+---
+
+## 2026-05-24
+
+### 决策：把同 support 的 conflict `rule-tokens + rule-context` 合成 `shared-conflict-rule-details`
+
+当前状态：
+
+- mixed conflict 子组已经能分别上提 `shared-conflict-rule-tokens` 和 `shared-conflict-rule-context`
+- 但如果两者刚好命中同一批 `rules=...`，输出里仍会连续重复同一组 rule id
+- 这类重复也不提供新的结构信息，只是在把同一组局部描述拆成两行
+
+因此这轮继续做一层保守压缩：
+
+- 当同一批 conflict rule 同时共享 `strategies/subjects` 和 `domains/targets` 时
+- 不再分开输出两条局部描述行
+- 而是合成一条 `shared-conflict-rule-details`
+
+原因：
+
+- 继续压缩 grouped summary 的局部重复 token
+- 不改变 merge 判定逻辑，只收紧 explainers 的表达层
+- 保留 `rules -> descriptor fields` 的映射可读性，同时减少重复的 `rules=...`
+
+---
+
+## 2026-05-25
+
+### 决策：把同 support 的 conflict `rule-metadata + rule-actions` 合成 `shared-conflict-rule-summary`
+
+当前状态：
+
+- mixed conflict 子组已经能分别上提 `shared-conflict-rule-metadata` 和 `shared-conflict-rule-actions`
+- 但如果两者刚好命中同一批 `rules=...`，输出里还是会重复同一组 rule id
+- 这类重复也不再提供新的结构信息，只是在把同一组局部 summary 拆成两行
+
+因此这轮继续做一层保守压缩：
+
+- 当同一批 conflict rule 同时共享 `shared-conflict-rule-metadata`
+- 且也共享 `direct/review impacts + direct/review write_shapes` 时
+- 不再分开输出两条局部 summary 行
+- 而是合成一条 `shared-conflict-rule-summary`
+
+原因：
+
+- 继续压缩 grouped summary 的局部重复 token
+- 不改变 merge 判定逻辑，只收紧 explainers 的表达层
+- 保留 `rules -> summary fields` 的映射可读性，同时减少重复的 `rules=...`
+
+---
+
+## 2026-05-25
+
+### 决策：把同 support 的 conflict `structure-tokens + rule-details` 合成 `shared-conflict-rule-metadata`
+
+当前状态：
+
+- mixed conflict 子组已经能分别上提 `shared-conflict-structure-tokens` 和 `shared-conflict-rule-details`
+- 但如果两者刚好命中同一批 `rules=...`，输出里仍会连续重复同一组 rule id
+- 这类重复同样不提供新的结构信息，只是在把同一组局部 descriptor 拆成两行
+
+因此这轮继续做一层保守压缩：
+
+- 当同一批 conflict rule 同时共享 `direct/override/subject_scope`
+- 且也共享 `strategies/subjects + domains/targets` 时
+- 不再分开输出两条局部 descriptor 行
+- 而是合成一条 `shared-conflict-rule-metadata`
+
+原因：
+
+- 继续压缩 grouped summary 的局部重复 token
+- 不改变 merge 判定逻辑，只收紧 explainers 的表达层
+- 保留 `rules -> descriptor fields` 的映射可读性，同时减少重复的 `rules=...`
+
+---
+
+## 2026-05-24
+
+### 决策：relationship 词表继续补充 `一笑泯恩仇 / 反目成仇`
+
+当前状态：
+
+- `重修旧好 / 撕破脸` 已经接入 relationship 词表
+- 但中文大纲里也很常见 `一笑泯恩仇`、`反目成仇`
+- `反目成仇` 和既有 `反目` 共享前缀，如果不显式补长词并调整命中顺序，解释层会退化成较短 token
+
+因此这轮继续做一层保守扩展：
+
+- `一笑泯恩仇 -> reconciled`
+- `反目成仇 -> ruptured`
+- 同时把 `一笑泯恩仇` 纳入 relationship repeat hint
+
+原因：
+
+- 继续沿现有 reconciled / ruptured 状态机补齐高频中文写法
+- 顺手补齐长短词共享前缀时的 token 命中边界
+- 仍然只是词表边界扩展，不改数据结构
+
+---
+
+## 2026-05-24
+
+### 决策：relationship 词表继续补充 `重修旧好 / 撕破脸`
+
+当前状态：
+
+- `握手言和 / 恩断义绝` 已经接入 relationship 词表
+- 但中文大纲里也很常见 `重修旧好`、`撕破脸`
+- `重修旧好` 和 `握手言和 / 言归于好 / 破镜重圆` 一样，也带有关系重新修复的语义
+
+因此这轮继续做一层保守扩展：
+
+- `重修旧好 -> reconciled`
+- `撕破脸 -> ruptured`
+- 同时把 `重修旧好` 纳入 relationship repeat hint
+
+原因：
+
+- 继续沿现有 reconciled / ruptured 状态机补齐高频中文写法
+- 能再压掉一批 relationship-history 的漏判与误报
+- 仍然只是词表边界扩展，不改数据结构
+
+---
+
+## 2026-05-24
+
+### 决策：relationship 词表继续补充 `言归于好 / 彻底翻脸`
+
+当前状态：
+
+- `破镜重圆 / 闹翻` 已经接入 relationship 词表
+- 但中文大纲里也很常见 `言归于好`、`彻底翻脸`
+- `言归于好` 和 `重归于好 / 冰释前嫌 / 破镜重圆` 一样，也带有关系重新修复的语义
+
+因此这轮继续做一层保守扩展：
+
+- `言归于好 -> reconciled`
+- `彻底翻脸 -> ruptured`
+- 同时把 `言归于好` 纳入 relationship repeat hint
+
+原因：
+
+- 继续沿现有 reconciled / ruptured 状态机补齐高频中文写法
+- 能再压掉一批 relationship-history 的漏判与误报
+- 仍然只是词表边界扩展，不改数据结构
+
+---
+
+## 2026-05-24
+
+### 决策：relationship 词表继续补充 `握手言和 / 恩断义绝`
+
+当前状态：
+
+- `言归于好 / 彻底翻脸` 已经接入 relationship 词表
+- 但中文大纲里也很常见 `握手言和`、`恩断义绝`
+- `握手言和` 和 `言归于好 / 冰释前嫌 / 破镜重圆` 一样，也带有关系重新修复的语义
+
+因此这轮继续做一层保守扩展：
+
+- `握手言和 -> reconciled`
+- `恩断义绝 -> ruptured`
+- 同时把 `握手言和` 纳入 relationship repeat hint
+
+原因：
+
+- 继续沿现有 reconciled / ruptured 状态机补齐高频中文写法
+- 能再压掉一批 relationship-history 的漏判与误报
+- 仍然只是词表边界扩展，不改数据结构
