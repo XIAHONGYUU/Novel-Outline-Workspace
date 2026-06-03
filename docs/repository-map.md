@@ -24,6 +24,7 @@
 - 仓库结构
 - 数据模型
 - 校验规则
+- `P0` 收口与 acceptance framework
 
 ### `scripts/`
 
@@ -33,6 +34,7 @@
 - `refresh_workspace_status.py`
 - `ingest_idea.py`
 - `backfill_intake_drafts.py`
+- `update_intake_draft.py`
 - `validate_workspace.py`
 - `plan_idea_merge.py`
 - `apply_idea_merge.py`
@@ -52,6 +54,7 @@
 - 从零初始化
 - 至少包含 1 条真实 pending idea
 - 当前停在 `check-consistency` 已过、`plan-merge` 已生成、尚未 `apply` 的状态
+ - 当前已完成首轮完整闭环，并继续作为 apply / validate 回归样本
 
 ### `src/novel_outline_workspace/`
 

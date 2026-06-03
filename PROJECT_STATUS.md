@@ -1,6 +1,6 @@
 # Project Status
 
-最后更新：2026-06-01
+最后更新：2026-06-03
 
 ## 项目定位
 
@@ -45,6 +45,7 @@
 1. 先定义 `P0` 收口标准
 2. 再做工作区级验收
 3. 只有在真实闭环被卡住时，才回头修对应规则
+4. 顶层上按固定 `acceptance tracks` 推进，而不再按零散样例堆进度
 
 当前这条判断已经有了第一轮实证支撑：
 
@@ -58,6 +59,52 @@
 - 暴露出的核心问题不是新的 consistency 规则缺口，而是 `warning-only / needs-info` case 的工作流提示不够具体
 - `workspace-status.json` 与 pipeline `auto` 现在已经开始把这类 case 明确收敛到 `repair-intake` 路径，而不再泛化成继续 `plan-merge`
 - `apply_idea_merge.py` 现已支持一次性消费多条 `merge_input_id`，`timeline / outline / canon` 的组合写入不再需要手工拼参数
+- `update_intake_draft.py` 已补上“人类确认字段如何写回 intake draft”的确定性入口，`repair-intake -> plan-merge -> apply-merge` 现在已有脚本级闭环测试
+
+第三轮真实 workspace 验收也已经推进：
+
+- `demo-workspace/` 的 `idea-20260511-006` 已从 `repair-intake` 真正走到 `apply`
+- 这轮验证表明：`repair-intake -> check-consistency -> plan-merge -> apply-merge -> validate` 已不只是临时测试工作区能跑通，真实样例工作区也能闭环
+- 验收过程还顺手确认了一点：对这类 `character` beat，当前最稳的 direct apply 形态是落成 outline 场景，而不是勉强制造新的 canon 结构记录
+
+第四轮真实 workspace 验收也已经推进：
+
+- `demo-workspace/` 的 `idea-20260602-001` 已从 `ingest` 真正走到一次性 multi-input `apply`
+- 这轮验证表明：重复传入 `--merge-input-id` 不只是 CLI 能力已经补齐，真实 workspace 里也能一口气把 `timeline / outline + canon knowledge-state` 落地
+- 当前更真实的剩余缺口，已经开始从“多 input 能不能一起 apply”转向“`relationship / character` 类 idea 怎样更稳定地产生 canon 结构联动”
+
+第五轮真实 workspace 验收也已经推进：
+
+- `demo-workspace/` 的 `idea-20260602-002` 已从 `ingest` 真正走到一次性 `outline scene + canon relationship` 的 apply
+- 这轮验证表明：`relationship` 类 idea 不只是能在测试里写入 `state/canon-index.json`，真实 workspace 里也能稳定生成结构化关系记录
+- 当前更真实的剩余缺口，已经继续前移到“已有关系记录的后续状态转移、复用与冲突收敛”这一层，而不再是“关系能不能第一次落库”
+
+第六轮真实 workspace 验收也已经推进：
+
+- `demo-workspace/` 的 `idea-20260602-003` 已把“已有关系继续变化”收敛成真实的 `relationship-history-conflict`
+- 这轮先暴露并修掉了一个 planner 缺口：同一条 relationship reuse input 不再重复出现在 plan 里，`canon` action 现在也会稳定带上对应 `merge_input_id`
+- 但这轮也把更深一层的真实空白暴露出来了：对“第 6 章再次结盟”这类 same-state repeat beat，当前 `update-existing-relationship` 会倾向于把既有关系记录整体改写到新章节，这在语义上还不够稳
+
+第七轮真实 workspace 验收也已经推进：
+
+- `demo-workspace/` 的 `idea-20260602-003` 已从 `relationship-history-conflict` 真正走到 `apply`
+- 这轮验证表明：对“第 6 章再次结盟”这类 same-state repeat beat，planner 现在会优先产出 `scene-only` 的 gate-resolving input，而不是直接改写第 5 章既有 `canon relationship`
+- apply 后 `state/canon-index.json` 仍保留第 5 章的首次结盟记录，第 6 章则新增 narrative scene，随后 consistency 已清空，`demo-workspace/` 当前回到 `pending=0 / applied=7 / rejected=4`
+- 当前更真实的剩余缺口已经继续前移到：什么情况下应当把“既有关系后续变化”落成新的 `canon relationship` 历史节点，而不只是 scene 或覆写旧节点
+
+第八轮真实 workspace 验收也已经推进：
+
+- `demo-workspace/` 的 `idea-20260602-004` 已从 `ingest` 真正走到一次性 `scene + new canon relationship history node` 的 `apply`
+- 这轮验证表明：对“第 7 章决裂”这类真实状态转移，planner 现在会稳定追加新的 `canon relationship` 历史节点，而不是复用或覆写第 5 章旧的 `allied` 节点
+- apply 后 `state/canon-index.json` 当前已形成 `allied@5 -> ruptured@7` 的正式关系链，`outline/scene-index.json` 也同步新增了第 7 章 scene，consistency / validator 均保持 `ok=true`
+- 当前更真实的剩余缺口已经继续前移到：多段 relationship history chain 之后，后续 `reconciled / allied again` 这类再变化在真实 workspace 中应如何继续落库
+
+第九轮真实 workspace 验收也已经推进：
+
+- `demo-workspace/` 的 `idea-20260603-001` 已从 `ingest` 真正走到一次性 `scene + new canon relationship history node` 的 `apply`
+- 这轮验证表明：在已有 `allied@5 -> ruptured@7` 的关系链上，后续 `reconciled@9` 也能稳定追加成新的正式 history 节点，而不会打断既有链条
+- apply 后 `state/canon-index.json` 当前已形成 `allied@5 -> ruptured@7 -> reconciled@9` 的三段关系链，`outline/scene-index.json` 也同步新增了第 9 章 scene，consistency / validator 均保持 `ok=true`
+- 当前更真实的剩余缺口已经继续前移到：在已有 `reconciled` 节点之后，未来的 `再次结盟 / 再次和解` 这类 repeat beat，是否仍应只落 scene，以及怎样避免与已有 history chain 冲突
 
 已经完成的方向：
 
@@ -74,9 +121,17 @@
 - world-rule 多策略 merge input
 - graph-aware consistency 豁免
 - formal intake backfill / repair 入口
+- confirmed intake patch 入口
 - domain-specific merge plan explainers
 - `needs-info` pending path 显式化：当 merge plan 缺少 `chapter_number` 等关键字段时，状态层与 orchestrator 已会优先提示 `repair-intake`
 - multi-input apply 入口：CLI 与底层 `apply_idea_merge` 已支持一条 idea 一次性消费一组 merge inputs
+- `demo-workspace/` 已补齐真实 multi-input apply 样例，当前 pending 已清空，pipeline `auto` 已回到 `validate`
+- `demo-workspace/` 已补齐真实 relationship 样例，`state/canon-index.json` 中已有正式 `relationships` 记录
+- relationship reuse planner 已去重并修正 action 绑定；same-state repeat beat 现已稳定落成 `scene-only` 闭环
+- 真实 relationship state transition 现已能稳定追加新的 `canon relationship` 历史节点
+- 多段 relationship history chain 现已能在真实 workspace 中稳定扩展到 `reconciled`
+- 当前更真实的剩余问题是：已有 `reconciled` 节点之后，未来 repeat beat / 再变化如何继续与整条 history chain 保持一致
+- 这条推进路线现已在 `docs/workspace-acceptance-framework.md` 里收敛成显式 framework，避免顶层继续被零散 case 主导
 
 ## 已完成能力
 

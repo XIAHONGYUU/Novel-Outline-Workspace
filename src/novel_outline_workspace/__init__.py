@@ -4,6 +4,7 @@ from .workspace import (
     init_workspace,
     ingest_idea,
     render_workspace_views,
+    update_intake_draft,
     validate_workspace,
 )
 from .consistency import check_idea_consistency
@@ -22,5 +23,6 @@ __all__ = [
     "plan_idea_merge",
     "render_workspace_views",
     "run_outline_workspace_pipeline",
+    "update_intake_draft",
     "validate_workspace",
 ]

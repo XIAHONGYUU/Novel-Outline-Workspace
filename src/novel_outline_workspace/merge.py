@@ -72,6 +72,21 @@ RELATIONSHIP_STATE_LABELS = {
     "met": "初见",
     "strangers": "互不认识",
 }
+RELATIONSHIP_REPEAT_HINT_TOKENS = (
+    "重新",
+    "再次",
+    "再度",
+    "重归于好",
+    "重修旧好",
+    "言归于好",
+    "握手言和",
+    "冰释前嫌",
+    "尽释前嫌",
+    "破镜重圆",
+    "一笑泯恩仇",
+    "化干戈为玉帛",
+    "又",
+)
 
 
 def _load_idea_log(workspace: Path) -> dict[str, Any]:
@@ -1752,7 +1767,12 @@ def _dedupe_domain_explainers(explainers: list[dict[str, Any]]) -> list[dict[str
             for item in (current, explainer)
             if item.get("merge_input_id") is not None
         }
-        merged["merge_input_id"] = next(iter(merge_input_ids)) if merged["_duplicate_count"] == 1 and len(merge_input_ids) == 1 else None
+        preferred_is_stronger = _readiness_rank(preferred.get("readiness")) > _readiness_rank(secondary.get("readiness"))
+        merged["merge_input_id"] = (
+            next(iter(merge_input_ids))
+            if len(merge_input_ids) == 1 and preferred_is_stronger
+            else None
+        )
         merged["confidence"] = preferred.get("confidence") or secondary.get("confidence")
         deduped[existing_index] = merged
 
@@ -2059,6 +2079,11 @@ def _relationship_state_label(state: str | None) -> str:
     return RELATIONSHIP_STATE_LABELS.get(str(state or ""), str(state or "关系"))
 
 
+def _has_relationship_repeat_hint(text: str) -> bool:
+    haystack = str(text or "")
+    return any(token in haystack for token in RELATIONSHIP_REPEAT_HINT_TOKENS)
+
+
 def _relationship_record_id(character_ids: list[str], relationship_state: str, reading_chapter: int | None) -> str:
     pair = "-".join(sorted(character_ids))
     chapter_suffix = f"-ch{reading_chapter}" if isinstance(reading_chapter, int) else ""
@@ -2214,6 +2239,7 @@ def _default_timeline_apply_args(
             missing_fields.append("participant_ids")
 
     if "outline" in domains and scene_title:
+        scene_event_ids = [event_id] if "timeline" in domains and event_id else []
         apply_args.update(
             {
                 "chapter_number": chapter_hint,
@@ -2222,7 +2248,7 @@ def _default_timeline_apply_args(
                 "scene_pov": scene_pov,
                 "scene_status": "planned",
                 "scene_character_ids": participant_ids,
-                "scene_event_ids": [event_id] if event_id else [],
+                "scene_event_ids": scene_event_ids,
                 "scene_notes": idea.get("content", ""),
             }
         )
@@ -2288,6 +2314,14 @@ def _build_default_relationship_merge_input(
         if len(participant_ids) >= 2
         else None
     )
+    repeat_hint = _has_relationship_repeat_hint(f"{idea.get('title', '')}\n{draft.get('content', '')}")
+    if (
+        existing_relationship is not None
+        and repeat_hint
+        and isinstance(reading_chapter, int)
+        and existing_relationship.get("reading_chapter") != reading_chapter
+    ):
+        return None
     relationship_id = (
         str(existing_relationship.get("id"))
         if existing_relationship and existing_relationship.get("id")
@@ -2602,6 +2636,9 @@ def _build_issue_driven_knowledge_merge_inputs(
 
 def _build_issue_driven_relationship_merge_inputs(
     workspace: Path,
+    idea: dict[str, Any],
+    draft: dict[str, Any],
+    domains: list[str],
     report: dict[str, Any],
     gate: dict[str, Any],
 ) -> list[dict[str, Any]]:
@@ -2631,15 +2668,45 @@ def _build_issue_driven_relationship_merge_inputs(
             if existing_relationship and existing_relationship.get("id")
             else _relationship_record_id(character_ids, relationship_state, draft_chapter if isinstance(draft_chapter, int) else None)
         )
+        repeat_hint = _has_relationship_repeat_hint(f"{idea.get('title', '')}\n{draft.get('content', '')}")
         issue_key = (issue_code, relationship_id)
         if issue_key in seen:
             continue
         seen.add(issue_key)
 
+        record_type = str(details.get("record_type") or "")
+        if (
+            issue_code == "relationship-history-conflict"
+            and record_type == "canon-relationship"
+            and existing_relationship is not None
+            and repeat_hint
+        ):
+            scene_apply_args, scene_targets, scene_missing_fields = _default_timeline_apply_args(workspace, idea, draft, domains)
+            if scene_apply_args.get("scene_id") and scene_targets:
+                inputs.append(
+                    {
+                        "id": f"timeline-merge-rel-repeat-{len(inputs) + 1:03d}",
+                        "kind": "timeline-merge-input",
+                        "strategy": "create-event-and-scene",
+                        "summary": f"保留既有关系 `{relationship_id}` 的 canon 首次记录，仅把 `{idea.get('title')}` 作为后续关系 beat 并入 scene。",
+                        "target_files": scene_targets,
+                        "source_issue_code": issue_code,
+                        "source_patch_suggestion_ids": _patch_suggestion_ids(report, issue_code),
+                        "missing_fields": scene_missing_fields,
+                        "can_apply_directly": not scene_missing_fields,
+                        "requires_override": False,
+                        "resolves_blocked_gate": not scene_missing_fields,
+                        "resolves_issue_codes": [issue_code] if not scene_missing_fields else [],
+                        "warnings": list(gate.get("warnings", [])),
+                        "resolution_note_suggestion": f"保留第 {existing_relationship.get('reading_chapter')} 章既有关系记录，只把这条重复关系 beat 落成 scene。",
+                        "apply_args": scene_apply_args,
+                    }
+                )
+            continue
+
         missing_fields: list[str] = []
         if not isinstance(draft_chapter, int):
             missing_fields.append("relationship_reading_chapter")
-        record_type = str(details.get("record_type") or "")
         resolves_from_canon = record_type == "canon-relationship"
         apply_args = {
             "relationship_id": relationship_id,
@@ -2850,7 +2917,7 @@ def _build_timeline_merge_inputs(
     inputs: list[dict[str, Any]] = []
     inputs.extend(_build_issue_driven_timeline_merge_inputs(workspace, report, gate))
     inputs.extend(_build_issue_driven_knowledge_merge_inputs(workspace, report, gate))
-    inputs.extend(_build_issue_driven_relationship_merge_inputs(workspace, report, gate))
+    inputs.extend(_build_issue_driven_relationship_merge_inputs(workspace, idea, draft, domains, report, gate))
     inputs.extend(_build_issue_driven_world_rule_merge_inputs(workspace, idea, draft, domains, report, gate))
 
     default_timeline_input = _build_default_timeline_merge_input(workspace, idea, draft, domains, gate)
@@ -2864,14 +2931,94 @@ def _build_timeline_merge_inputs(
     if default_knowledge_input is not None:
         inputs.append(default_knowledge_input)
 
+    return _dedupe_merge_inputs(inputs)
+
+
+def _merge_input_identity(item: dict[str, Any]) -> tuple[str, ...]:
+    strategy = str(item.get("strategy") or "").strip()
+    apply_args = item.get("apply_args", {}) if isinstance(item.get("apply_args"), dict) else {}
+    if strategy in {"upsert-canon-relationship", "update-existing-relationship"}:
+        return ("relationship", strategy, str(apply_args.get("relationship_id") or "").strip())
+    if strategy in {"upsert-canon-knowledge-state", "update-existing-knowledge-state"}:
+        return ("knowledge", strategy, str(apply_args.get("knowledge_state_id") or "").strip())
+    if strategy in {"create-event-and-scene", "update-existing-event", "update-existing-scene"}:
+        return (
+            "story",
+            strategy,
+            str(apply_args.get("event_id") or "").strip(),
+            str(apply_args.get("scene_id") or "").strip(),
+            str(apply_args.get("chapter_number") or apply_args.get("reading_chapter") or "").strip(),
+        )
+    return (
+        "generic",
+        strategy,
+        str(item.get("id") or "").strip(),
+        str(item.get("summary") or "").strip(),
+    )
+
+
+def _merge_input_score(item: dict[str, Any]) -> tuple[int, int, int, int]:
+    return (
+        1 if item.get("resolves_blocked_gate") else 0,
+        1 if item.get("can_apply_directly") else 0,
+        1 if item.get("source_issue_code") else 0,
+        -len(item.get("missing_fields", []) or []),
+    )
+
+
+def _dedupe_merge_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deduped: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
+    index_by_identity: dict[tuple[str, ...], int] = {}
+
     for item in inputs:
-        key = (str(item.get("strategy") or ""), str(item.get("summary") or ""))
-        if key in seen:
+        identity = _merge_input_identity(item)
+        existing_index = index_by_identity.get(identity)
+        if existing_index is None:
+            index_by_identity[identity] = len(deduped)
+            deduped.append(item)
             continue
-        seen.add(key)
-        deduped.append(item)
+
+        current = deduped[existing_index]
+        preferred, secondary = (
+            (item, current)
+            if _merge_input_score(item) > _merge_input_score(current)
+            else (current, item)
+        )
+        merged = dict(preferred)
+        merged["target_files"] = sorted(
+            {
+                str(path)
+                for path in [*current.get("target_files", []), *item.get("target_files", [])]
+                if str(path).strip()
+            }
+        )
+        merged["source_patch_suggestion_ids"] = list(
+            dict.fromkeys(
+                str(value)
+                for value in [*current.get("source_patch_suggestion_ids", []), *item.get("source_patch_suggestion_ids", [])]
+                if str(value).strip()
+            )
+        )
+        merged["warnings"] = list(
+            dict.fromkeys(
+                str(value)
+                for value in [*current.get("warnings", []), *item.get("warnings", [])]
+                if str(value).strip()
+            )
+        )
+        merged["missing_fields"] = sorted(
+            {
+                str(value)
+                for value in [*current.get("missing_fields", []), *item.get("missing_fields", [])]
+                if str(value).strip()
+            }
+        )
+        if not merged.get("source_issue_code"):
+            merged["source_issue_code"] = secondary.get("source_issue_code")
+        if not merged.get("resolution_note_suggestion"):
+            merged["resolution_note_suggestion"] = secondary.get("resolution_note_suggestion")
+        deduped[existing_index] = merged
+
     return deduped
 
 

@@ -12,7 +12,16 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from novel_outline_workspace import check_idea_consistency
 from novel_outline_workspace.merge import _constraints_group_explainer, apply_idea_merge, plan_idea_merge
 from novel_outline_workspace.orchestrator import run_outline_workspace_pipeline
-from novel_outline_workspace.workspace import backfill_intake_drafts, collect_workspace_status, ingest_idea, init_workspace, read_json, validate_workspace, write_json
+from novel_outline_workspace.workspace import (
+    backfill_intake_drafts,
+    collect_workspace_status,
+    ingest_idea,
+    init_workspace,
+    read_json,
+    update_intake_draft,
+    validate_workspace,
+    write_json,
+)
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -513,6 +522,309 @@ class WorkspaceTests(unittest.TestCase):
             relationship_input = next(item for item in plan["timeline_merge_inputs"] if item["strategy"] == "update-existing-relationship")
             self.assertEqual(relationship_input["apply_args"]["relationship_id"], "rel-existing-alliance")
 
+    def test_relationship_repeat_beat_plan_prefers_scene_only_gate_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            canon_index = read_json(workspace / "state/canon-index.json", {})
+            canon_index["characters"].append(
+                {
+                    "id": "char-shijie",
+                    "name": "师姐",
+                    "aliases": [],
+                    "role": "mentor",
+                    "status": "alive",
+                    "death_event_id": None,
+                }
+            )
+            canon_index["relationships"] = [
+                {
+                    "id": "rel-existing-alliance",
+                    "character_ids": ["char-protagonist", "char-shijie"],
+                    "state": "allied",
+                    "reading_chapter": 5,
+                    "event_id": None,
+                    "notes": "旧记录",
+                }
+            ]
+            write_json(workspace / "state/canon-index.json", canon_index)
+            result = ingest_idea(
+                workspace,
+                title="林舟和师姐再次结盟",
+                content="林舟和师姐在第六章再次结盟。",
+                kind="relationship",
+            )
+            draft_path = workspace / "state" / "intake-drafts" / f"{result['idea']['id']}.json"
+            draft = read_json(draft_path, {})
+            draft["character_mentions"] = ["林舟", "师姐"]
+            draft["chapter_hints"] = [6]
+            draft["content"] = "林舟和师姐在第六章再次结盟。"
+            write_json(draft_path, draft)
+            report = check_idea_consistency(workspace, result["idea"]["id"])
+            self.assertTrue(any(issue["code"] == "relationship-history-conflict" for issue in report["issues"]))
+            plan = plan_idea_merge(workspace, result["idea"]["id"])
+            relationship_inputs = [
+                item
+                for item in plan["timeline_merge_inputs"]
+                if item["strategy"] == "update-existing-relationship"
+            ]
+            self.assertEqual(relationship_inputs, [])
+            scene_input = next(
+                item
+                for item in plan["timeline_merge_inputs"]
+                if item["strategy"] == "create-event-and-scene"
+                and item.get("source_issue_code") == "relationship-history-conflict"
+            )
+            self.assertTrue(scene_input["can_apply_directly"])
+            self.assertTrue(scene_input["resolves_blocked_gate"])
+            self.assertEqual(scene_input["target_files"], ["outline/master-outline.md", "outline/scene-index.json"])
+            self.assertEqual(scene_input["apply_args"]["chapter_number"], 6)
+            self.assertEqual(scene_input["apply_args"]["scene_title"], "林舟和师姐再次结盟")
+            self.assertEqual(scene_input["apply_args"]["scene_character_ids"], ["char-protagonist", "char-shijie"])
+            outline_explainer = next(
+                action
+                for action in plan["proposed_actions"]
+                if action["domain"] == "outline" and action["merge_input_id"] == scene_input["id"]
+            )
+            self.assertEqual(outline_explainer["readiness"], "ready")
+
+    def test_apply_repeat_relationship_beat_keeps_existing_canon_relationship_chapter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            canon_index = read_json(workspace / "state/canon-index.json", {})
+            canon_index["characters"].append(
+                {
+                    "id": "char-shijie",
+                    "name": "师姐",
+                    "aliases": [],
+                    "role": "mentor",
+                    "status": "alive",
+                    "death_event_id": None,
+                }
+            )
+            canon_index["relationships"] = [
+                {
+                    "id": "rel-existing-alliance",
+                    "character_ids": ["char-protagonist", "char-shijie"],
+                    "state": "allied",
+                    "reading_chapter": 5,
+                    "event_id": None,
+                    "notes": "旧记录",
+                }
+            ]
+            write_json(workspace / "state/canon-index.json", canon_index)
+            result = ingest_idea(
+                workspace,
+                title="林舟和师姐再次结盟",
+                content="林舟和师姐在第六章再次结盟，准备一起公开追查议会内部泄密。",
+                kind="relationship",
+            )
+            idea_id = result["idea"]["id"]
+            draft_path = workspace / "state" / "intake-drafts" / f"{idea_id}.json"
+            draft = read_json(draft_path, {})
+            draft["character_mentions"] = ["林舟", "师姐"]
+            draft["chapter_hints"] = [6]
+            draft["content"] = "林舟和师姐在第六章再次结盟，准备一起公开追查议会内部泄密。"
+            write_json(draft_path, draft)
+            report = check_idea_consistency(workspace, idea_id)
+            self.assertTrue(any(issue["code"] == "relationship-history-conflict" for issue in report["issues"]))
+
+            plan = plan_idea_merge(workspace, idea_id)
+            scene_input = next(
+                item
+                for item in plan["timeline_merge_inputs"]
+                if item["strategy"] == "create-event-and-scene"
+                and item.get("source_issue_code") == "relationship-history-conflict"
+            )
+
+            apply_idea_merge(
+                workspace,
+                idea_id=idea_id,
+                merge_input_id=scene_input["id"],
+                resolution_note="保留第5章既有结盟关系，只把第6章再次结盟作为新的场景 beat 写入 outline。",
+            )
+
+            updated_canon_index = read_json(workspace / "state/canon-index.json", {})
+            relationships = updated_canon_index.get("relationships", [])
+            self.assertEqual(len(relationships), 1)
+            self.assertEqual(relationships[0]["id"], "rel-existing-alliance")
+            self.assertEqual(relationships[0]["reading_chapter"], 5)
+
+            scene_index = read_json(workspace / "outline/scene-index.json", {})
+            chapter_six = next(chapter for chapter in scene_index["chapters"] if chapter["chapter"] == 6)
+            scene = next(scene for scene in chapter_six["scenes"] if scene["id"] == scene_input["apply_args"]["scene_id"])
+            self.assertEqual(scene["title"], "林舟和师姐再次结盟")
+            self.assertEqual(scene["characters"], ["char-protagonist", "char-shijie"])
+
+            followup_report = check_idea_consistency(workspace, idea_id)
+            self.assertFalse(any(issue["code"] == "relationship-history-conflict" for issue in followup_report["issues"]))
+
+    def test_relationship_state_transition_appends_new_canon_history_node(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            canon_index = read_json(workspace / "state/canon-index.json", {})
+            canon_index["characters"].append(
+                {
+                    "id": "char-shijie",
+                    "name": "师姐",
+                    "aliases": [],
+                    "role": "mentor",
+                    "status": "alive",
+                    "death_event_id": None,
+                }
+            )
+            canon_index["relationships"] = [
+                {
+                    "id": "rel-existing-alliance",
+                    "character_ids": ["char-protagonist", "char-shijie"],
+                    "state": "allied",
+                    "reading_chapter": 5,
+                    "event_id": None,
+                    "notes": "旧记录",
+                }
+            ]
+            write_json(workspace / "state/canon-index.json", canon_index)
+            result = ingest_idea(
+                workspace,
+                title="林舟和师姐决裂",
+                content="林舟和师姐在第七章决裂，公开翻脸。",
+                kind="relationship",
+            )
+            idea_id = result["idea"]["id"]
+            draft_path = workspace / "state" / "intake-drafts" / f"{idea_id}.json"
+            draft = read_json(draft_path, {})
+            draft["character_mentions"] = ["林舟", "师姐"]
+            draft["chapter_hints"] = [7]
+            draft["content"] = "林舟和师姐在第七章决裂，公开翻脸。"
+            write_json(draft_path, draft)
+
+            report = check_idea_consistency(workspace, idea_id)
+            self.assertTrue(report["ok"])
+            self.assertFalse(any(issue["code"] == "relationship-history-conflict" for issue in report["issues"]))
+
+            plan = plan_idea_merge(workspace, idea_id)
+            scene_input = next(item for item in plan["timeline_merge_inputs"] if item["strategy"] == "create-event-and-scene")
+            relationship_input = next(
+                item for item in plan["timeline_merge_inputs"] if item["strategy"] == "upsert-canon-relationship"
+            )
+            self.assertEqual(relationship_input["apply_args"]["relationship_id"], "rel-char-protagonist-char-shijie-ruptured-ch7")
+            self.assertEqual(relationship_input["apply_args"]["relationship_state"], "ruptured")
+            self.assertEqual(relationship_input["apply_args"]["relationship_reading_chapter"], 7)
+
+            apply_idea_merge(
+                workspace,
+                idea_id=idea_id,
+                merge_input_ids=[scene_input["id"], relationship_input["id"]],
+                resolution_note="把第7章决裂同时写入 scene 与新的 canon relationship 历史节点。",
+            )
+
+            updated_canon_index = read_json(workspace / "state/canon-index.json", {})
+            relationships = updated_canon_index.get("relationships", [])
+            self.assertEqual(len(relationships), 2)
+            self.assertEqual(relationships[0]["id"], "rel-existing-alliance")
+            self.assertEqual(relationships[0]["state"], "allied")
+            self.assertEqual(relationships[0]["reading_chapter"], 5)
+            self.assertEqual(relationships[1]["id"], "rel-char-protagonist-char-shijie-ruptured-ch7")
+            self.assertEqual(relationships[1]["state"], "ruptured")
+            self.assertEqual(relationships[1]["reading_chapter"], 7)
+
+            scene_index = read_json(workspace / "outline/scene-index.json", {})
+            chapter_seven = next(chapter for chapter in scene_index["chapters"] if chapter["chapter"] == 7)
+            scene = next(scene for scene in chapter_seven["scenes"] if scene["id"] == scene_input["apply_args"]["scene_id"])
+            self.assertEqual(scene["title"], "林舟和师姐决裂")
+            self.assertEqual(scene["characters"], ["char-protagonist", "char-shijie"])
+
+    def test_relationship_history_chain_can_append_reconciled_node_after_rupture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            canon_index = read_json(workspace / "state/canon-index.json", {})
+            canon_index["characters"].append(
+                {
+                    "id": "char-shijie",
+                    "name": "师姐",
+                    "aliases": [],
+                    "role": "mentor",
+                    "status": "alive",
+                    "death_event_id": None,
+                }
+            )
+            canon_index["relationships"] = [
+                {
+                    "id": "rel-existing-alliance",
+                    "character_ids": ["char-protagonist", "char-shijie"],
+                    "state": "allied",
+                    "reading_chapter": 5,
+                    "event_id": None,
+                    "notes": "旧记录",
+                },
+                {
+                    "id": "rel-existing-rupture",
+                    "character_ids": ["char-protagonist", "char-shijie"],
+                    "state": "ruptured",
+                    "reading_chapter": 7,
+                    "event_id": None,
+                    "notes": "后续决裂",
+                },
+            ]
+            write_json(workspace / "state/canon-index.json", canon_index)
+            result = ingest_idea(
+                workspace,
+                title="林舟和师姐和解",
+                content="林舟和师姐在第九章和解，再次联手。",
+                kind="relationship",
+            )
+            idea_id = result["idea"]["id"]
+            draft_path = workspace / "state" / "intake-drafts" / f"{idea_id}.json"
+            draft = read_json(draft_path, {})
+            draft["character_mentions"] = ["林舟", "师姐"]
+            draft["chapter_hints"] = [9]
+            draft["content"] = "林舟和师姐在第九章和解，再次联手。"
+            write_json(draft_path, draft)
+
+            report = check_idea_consistency(workspace, idea_id)
+            self.assertTrue(report["ok"])
+            self.assertFalse(any(issue["code"] == "relationship-history-conflict" for issue in report["issues"]))
+
+            plan = plan_idea_merge(workspace, idea_id)
+            scene_input = next(item for item in plan["timeline_merge_inputs"] if item["strategy"] == "create-event-and-scene")
+            relationship_input = next(
+                item for item in plan["timeline_merge_inputs"] if item["strategy"] == "upsert-canon-relationship"
+            )
+            self.assertEqual(relationship_input["apply_args"]["relationship_id"], "rel-char-protagonist-char-shijie-reconciled-ch9")
+            self.assertEqual(relationship_input["apply_args"]["relationship_state"], "reconciled")
+            self.assertEqual(relationship_input["apply_args"]["relationship_reading_chapter"], 9)
+
+            apply_idea_merge(
+                workspace,
+                idea_id=idea_id,
+                merge_input_ids=[scene_input["id"], relationship_input["id"]],
+                resolution_note="把第9章和解同时写入 scene 与新的 canon relationship 历史节点。",
+            )
+
+            updated_canon_index = read_json(workspace / "state/canon-index.json", {})
+            relationships = updated_canon_index.get("relationships", [])
+            self.assertEqual(
+                [item["id"] for item in relationships],
+                [
+                    "rel-existing-alliance",
+                    "rel-existing-rupture",
+                    "rel-char-protagonist-char-shijie-reconciled-ch9",
+                ],
+            )
+            self.assertEqual(
+                [item["state"] for item in relationships],
+                ["allied", "ruptured", "reconciled"],
+            )
+
+            scene_index = read_json(workspace / "outline/scene-index.json", {})
+            chapter_nine = next(chapter for chapter in scene_index["chapters"] if chapter["chapter"] == 9)
+            scene = next(scene for scene in chapter_nine["scenes"] if scene["id"] == scene_input["apply_args"]["scene_id"])
+            self.assertEqual(scene["title"], "林舟和师姐和解")
+            self.assertEqual(scene["characters"], ["char-protagonist", "char-shijie"])
+
     def test_apply_merge_input_can_move_existing_scene_across_chapters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp) / "demo"
@@ -1002,7 +1314,7 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(len(timeline_actions), 3)
             self.assertEqual(len(outline_actions), 3)
             merged_timeline_action = next(action for action in timeline_actions if "第 7 章" in action["summary"])
-            self.assertIsNone(merged_timeline_action["merge_input_id"])
+            self.assertEqual(merged_timeline_action["merge_input_id"], "timeline-merge-001")
             rule2_exception = next(
                 action
                 for action in plan["proposed_actions"]
@@ -2893,6 +3205,114 @@ class WorkspaceTests(unittest.TestCase):
             self.assertTrue(executed["executed"])
             self.assertEqual(executed["consistency_report"]["idea_id"], idea_id)
             self.assertEqual(executed["intake_repair"]["repaired_count"], 1)
+
+    def test_update_intake_draft_enables_repair_plan_apply_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            result = ingest_idea(
+                workspace,
+                title="师徒关系裂缝",
+                content="师姐在白塔议事厅确认林舟可能不会继续站在议会一边",
+                kind="character",
+            )
+            idea_id = result["idea"]["id"]
+
+            initial_report = check_idea_consistency(workspace, idea_id)
+            self.assertTrue(initial_report["ok"])
+            initial_plan = plan_idea_merge(workspace, idea_id)
+            self.assertIn("chapter_number", initial_plan["timeline_merge_inputs"][0]["missing_fields"])
+            self.assertEqual(run_outline_workspace_pipeline(workspace)["recommended_action"], "repair-intake")
+
+            patched = update_intake_draft(
+                workspace,
+                idea_id=idea_id,
+                chapter_hints=[6],
+                clear_open_questions=True,
+            )
+            self.assertEqual(patched["draft"]["chapter_hints"], [6])
+            self.assertEqual(patched["draft"]["open_questions"], [])
+            self.assertFalse((workspace / "state" / "merge-plans" / f"{idea_id}.json").exists())
+
+            refreshed_report = check_idea_consistency(workspace, idea_id)
+            self.assertTrue(refreshed_report["ok"])
+            self.assertEqual(refreshed_report["warning_count"], 0)
+
+            pipeline = run_outline_workspace_pipeline(workspace)
+            self.assertEqual(pipeline["recommended_action"], "plan-merge")
+
+            plan = plan_idea_merge(workspace, idea_id)
+            merge_input = plan["timeline_merge_inputs"][0]
+            self.assertTrue(merge_input["can_apply_directly"])
+            merged = apply_idea_merge(
+                workspace,
+                idea_id=idea_id,
+                merge_input_id=merge_input["id"],
+                resolution_note="把师徒关系裂缝并入第六章场景。",
+            )
+            self.assertEqual(merged["idea"]["status"], "applied")
+            self.assertTrue(merged["validation_report"]["ok"])
+
+    def test_update_intake_draft_cli_supports_repair_plan_apply_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            result = ingest_idea(
+                workspace,
+                title="师徒关系裂缝",
+                content="师姐在白塔议事厅确认林舟可能不会继续站在议会一边",
+                kind="character",
+            )
+            idea_id = result["idea"]["id"]
+            check_idea_consistency(workspace, idea_id)
+            plan_idea_merge(workspace, idea_id)
+
+            patch_command = [
+                sys.executable,
+                "scripts/update_intake_draft.py",
+                "--workspace",
+                str(workspace),
+                "--idea-id",
+                idea_id,
+                "--chapter-hint",
+                "6",
+                "--clear-open-questions",
+                "--json",
+            ]
+            patched = subprocess.run(
+                patch_command,
+                cwd=REPO_ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn('"chapter_hints": [', patched.stdout)
+
+            check_idea_consistency(workspace, idea_id)
+            plan = plan_idea_merge(workspace, idea_id)
+            merge_input = plan["timeline_merge_inputs"][0]
+            apply_command = [
+                sys.executable,
+                "scripts/apply_idea_merge.py",
+                "--workspace",
+                str(workspace),
+                "--idea-id",
+                idea_id,
+                "--merge-input-id",
+                str(merge_input["id"]),
+                "--resolution-note",
+                "按修补后的 intake draft 并入。",
+                "--json",
+            ]
+            applied = subprocess.run(
+                apply_command,
+                cwd=REPO_ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn('"status": "applied"', applied.stdout)
+            self.assertEqual(run_outline_workspace_pipeline(workspace)["recommended_action"], "render")
 
     def test_idea_intake_infers_kind_tags_and_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

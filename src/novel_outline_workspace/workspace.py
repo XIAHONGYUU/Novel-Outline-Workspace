@@ -199,6 +199,10 @@ def _merge_plan_path(workspace: Path, idea_id: str) -> Path:
     return workspace / "state/merge-plans" / f"{idea_id}.json"
 
 
+def _merge_plan_view_path(workspace: Path, idea_id: str) -> Path:
+    return workspace / "views/merge-plans" / f"{idea_id}.html"
+
+
 def _sortable_timestamp(value: Any) -> str:
     return str(value or "").strip()
 
@@ -273,12 +277,37 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
     open_questions = [str(item).strip() for item in draft.get("open_questions", []) if str(item).strip()]
 
     plan_path = _merge_plan_path(workspace, idea_id)
-    plan = read_json(plan_path, {}) if plan_path.exists() else {}
+    if not plan_path.exists():
+        return {
+            "idea_id": idea_id,
+            "report_status": "fresh",
+            "plan_status": "missing",
+            "has_conflicts": has_conflicts,
+            "needs_intake_repair": bool(open_questions or set(warning_codes) & INTAKE_REPAIR_WARNING_CODES),
+            "warning_codes": warning_codes,
+            "open_questions": open_questions,
+            "missing_fields": [],
+        }
+
+    plan = read_json(plan_path, {})
+    if _sortable_timestamp(plan.get("created_at")) < _sortable_timestamp(idea.get("updated_at")):
+        return {
+            "idea_id": idea_id,
+            "report_status": "fresh",
+            "plan_status": "stale",
+            "has_conflicts": has_conflicts,
+            "needs_intake_repair": bool(open_questions or set(warning_codes) & INTAKE_REPAIR_WARNING_CODES),
+            "warning_codes": warning_codes,
+            "open_questions": open_questions,
+            "missing_fields": [],
+        }
+
     missing_fields = _merge_plan_missing_fields(plan)
 
     return {
         "idea_id": idea_id,
         "report_status": "fresh",
+        "plan_status": "fresh",
         "has_conflicts": has_conflicts,
         "needs_intake_repair": bool(
             missing_fields or open_questions or set(warning_codes) & INTAKE_REPAIR_WARNING_CODES
@@ -299,6 +328,8 @@ def describe_pending_idea_next_step(workspace: Path, idea: dict[str, Any]) -> st
         return f"先重跑 `{title}` 的 consistency check，再继续 merge。"
     if progress["has_conflicts"]:
         return f"先处理 `{title}` 的 consistency 冲突，再决定如何 merge。"
+    if progress.get("plan_status") in {"missing", "stale"}:
+        return f"先为 `{title}` 重跑 merge plan，确认最新写入路径。"
     if progress["needs_intake_repair"]:
         if progress["missing_fields"]:
             return f"先补 `{title}` 的 { _format_missing_field_labels(progress['missing_fields']) }，再继续 apply merge。"
@@ -1694,6 +1725,14 @@ def _resolve_intake_paths(workspace: Path, idea: dict[str, Any]) -> tuple[Path, 
     return draft_path, view_path
 
 
+def _find_idea(workspace: Path, idea_id: str) -> tuple[dict[str, Any], dict[str, Any], int]:
+    idea_log = read_json(workspace / "state/idea-log.json", {"ideas": []})
+    for index, idea in enumerate(idea_log.get("ideas", [])):
+        if idea.get("id") == idea_id:
+            return idea_log, idea, index
+    raise ValueError(f"unknown idea id: {idea_id}")
+
+
 def _idea_needs_intake_repair(workspace: Path, idea: dict[str, Any]) -> bool:
     draft_path, view_path = _resolve_intake_paths(workspace, idea)
     if not str(idea.get("intake_draft_path") or "").strip():
@@ -1832,6 +1871,90 @@ def backfill_intake_drafts(
         "skipped_count": len(skipped),
         "repaired": repaired,
         "skipped": skipped,
+        "status": refreshed_status,
+    }
+
+
+def update_intake_draft(
+    workspace: Path,
+    *,
+    idea_id: str,
+    chapter_hints: list[int] | None = None,
+    location_candidates: list[str] | None = None,
+    character_mentions: list[str] | None = None,
+    open_questions: list[str] | None = None,
+    clear_open_questions: bool = False,
+) -> dict[str, Any]:
+    workspace = workspace.expanduser().resolve()
+    idea_log, idea, idea_index = _find_idea(workspace, idea_id)
+    draft_path, view_path = _resolve_intake_paths(workspace, idea)
+    if not draft_path.exists():
+        raise ValueError(f"intake draft not found for `{idea_id}`")
+
+    draft = read_json(draft_path, {})
+    updated = dict(draft)
+
+    def _clean_strings(values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        cleaned: list[str] = []
+        for item in values:
+            token = str(item or "").strip()
+            if token and token not in cleaned:
+                cleaned.append(token)
+        return cleaned
+
+    if chapter_hints is not None:
+        deduped_chapters: list[int] = []
+        for item in chapter_hints:
+            if isinstance(item, int) and item not in deduped_chapters:
+                deduped_chapters.append(item)
+        updated["chapter_hints"] = deduped_chapters
+        for candidate in updated.get("timeline_candidates", []):
+            candidate["reading_chapter_hint"] = deduped_chapters[0] if deduped_chapters else None
+
+    cleaned_locations = _clean_strings(location_candidates)
+    if cleaned_locations is not None:
+        updated["location_candidates"] = cleaned_locations
+        for candidate in updated.get("timeline_candidates", []):
+            candidate["location_candidates"] = cleaned_locations
+
+    cleaned_mentions = _clean_strings(character_mentions)
+    if cleaned_mentions is not None:
+        updated["character_mentions"] = cleaned_mentions
+        for candidate in updated.get("timeline_candidates", []):
+            candidate["participant_candidates"] = cleaned_mentions
+
+    if clear_open_questions:
+        updated["open_questions"] = []
+    cleaned_questions = _clean_strings(open_questions)
+    if cleaned_questions is not None:
+        updated["open_questions"] = cleaned_questions
+
+    write_json(draft_path, updated)
+    write_text(view_path, _render_intake_draft_html(updated))
+
+    refreshed_idea = dict(idea)
+    refreshed_idea["intake_draft_path"] = str(draft_path.resolve())
+    refreshed_idea["intake_draft_view_path"] = str(view_path.resolve())
+    refreshed_idea["updated_at"] = now_iso()
+    idea_log["ideas"][idea_index] = refreshed_idea
+    write_json(workspace / "state/idea-log.json", idea_log)
+
+    _consistency_report_path(workspace, idea_id).unlink(missing_ok=True)
+    (workspace / "views/consistency-checks" / f"{idea_id}.html").unlink(missing_ok=True)
+    _merge_plan_path(workspace, idea_id).unlink(missing_ok=True)
+    _merge_plan_view_path(workspace, idea_id).unlink(missing_ok=True)
+
+    refreshed_status = collect_workspace_status(workspace)
+    write_json(workspace / "state/workspace-status.json", refreshed_status)
+    render_workspace_views(workspace, status=refreshed_status)
+    return {
+        "workspace_path": str(workspace),
+        "idea_id": idea_id,
+        "draft_path": str(draft_path.resolve()),
+        "view_path": str(view_path.resolve()),
+        "draft": updated,
         "status": refreshed_status,
     }
 

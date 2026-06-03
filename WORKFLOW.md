@@ -16,6 +16,18 @@
   -> 写回状态与 HTML 视图
 ```
 
+## 当前默认推进框架
+
+从 `P0` 当前阶段开始，默认不再按“哪里像是还能补规则”来推进，而是按一组固定的 `acceptance tracks` 推进：
+
+1. 先识别当前缺的是哪一条工作区闭环
+2. 再选一个最小但真实的 workspace case 去跑
+3. 只有真实闭环被卡住时，才回头修规则或 planner
+
+详见：
+
+- `docs/workspace-acceptance-framework.md`
+
 ## 各层职责
 
 ### `inbox`

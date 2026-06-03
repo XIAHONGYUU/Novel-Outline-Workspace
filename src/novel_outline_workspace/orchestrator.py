@@ -59,6 +59,14 @@ def choose_next_action(workspace: Path) -> dict[str, Any]:
                 "status": status,
             }
         progress = inspect_pending_idea_progress(workspace, target_idea)
+        if progress.get("plan_status") in {"missing", "stale"}:
+            return {
+                "workspace": str(workspace),
+                "recommended_action": "plan-merge",
+                "reason": f"当前最早一条 pending idea `{target_idea.get('title')}` 已有最新 consistency，但 merge plan 还没跟上，先重跑 plan。",
+                "idea_id": target_idea.get("id"),
+                "status": status,
+            }
         if progress.get("needs_intake_repair"):
             return {
                 "workspace": str(workspace),

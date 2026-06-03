@@ -2,6 +2,116 @@
 
 这个文件记录会影响项目方向、实现边界和协作方式的关键决策。
 
+## 2026-06-03
+
+### 决策：P0 顶层推进改为“acceptance tracks framework”，而不是继续按零散样例推进
+
+当前状态：
+
+- relationship history 这条线已经连续跑通了 `first node / repeat beat / transition / reconciliation`
+- 如果继续只按单个样例记进展，顶层计划会越来越像流水账
+- 这会让后续协作重新回到“看起来哪里还能补，就先补哪里”的模式
+
+因此这一轮开始：
+
+- 顶层默认用 `docs/workspace-acceptance-framework.md` 追踪当前阶段
+- 每次推进先判断是在补哪一条 `acceptance track`
+- 只有当某条 track 被真实 workspace 卡住时，才回头补脚本、planner 或 consistency 细节
+
+原因：
+
+- 当前最重要的已经不是多一个例子，而是把“哪些闭环已经收口、下一个缺口在哪”说清楚
+- 这样更容易避免重新陷进细节型推进
+- 也更适合后续把零散 case 收束成稳定阶段框架
+
+影响：
+
+- 顶层计划将不再默认围绕单个样例书写
+- `NEXT_ACTIONS.md` 和 `PROJECT_STATUS.md` 会更强调 track，而不是只强调 case
+- 下一步默认优先补 `Track 8: Post-Reconciliation Repeat Beat`
+
+### 决策：relationship reconciliation 继续沿用“追加新 history 节点”而不是回写旧节点
+
+当前状态：
+
+- `demo-workspace/idea-20260603-001` 在已有 `allied@5 -> ruptured@7` 关系链后，又新增了第 9 章 `和解`
+- 这类 case 本质上不是 repeat beat，而是关系状态在历史链上的再次变化
+- 如果把它回写到旧节点，关系链就会失去中间阶段
+
+因此这一轮确认：
+
+- 对 `reconciled` 这类后续复归型状态，默认继续产出新的 `upsert-canon-relationship`
+- apply 时保留旧的 `allied / ruptured` 节点，同时追加新的 chapter-scoped `reconciled` 节点
+- `outline scene + canon relationship` 继续作为这类复归型 case 的默认真实闭环形态
+
+原因：
+
+- 关系的恢复本身也是正式 canon 事实，不应只停留在 scene 层
+- 追加新节点能保住完整关系链，而不是把“关系曾经破裂”抹掉
+- 这样后续遇到 `再次结盟 / 再次和解` 时，planner 才有稳定的 history basis 可用
+
+影响：
+
+- `demo-workspace` 当前已形成 `allied@5 -> ruptured@7 -> reconciled@9` 的三段 relationship history chain
+- 关系层的真实验收已经不止覆盖单次状态转移，而是开始覆盖连续 history
+- 下一阶段的重点继续前移到：已有 `reconciled` 节点之后，repeat beat / 再变化怎样与整条 history chain 对齐
+
+## 2026-06-02
+
+### 决策：真实 relationship state transition 默认追加新的 `canon relationship` history 节点
+
+当前状态：
+
+- `demo-workspace/idea-20260602-004` 暴露出另一类真实 case：第 5 章已经有正式 `allied` 关系记录，第 7 章又出现 `决裂`
+- 这类 case 和 same-state repeat beat 不同，它不是“再次确认旧状态”，而是关系状态真的发生了变化
+- 如果继续复用旧节点或只写 scene，`canon` 层就无法稳定表达关系史
+
+因此这一轮开始：
+
+- 对明确的 relationship state transition，planner 默认继续产出新的 `upsert-canon-relationship`
+- apply 时保留旧关系节点，同时追加新的 chapter-scoped relationship history 节点
+- `outline scene + canon relationship` 继续作为这类 case 的默认真实闭环形态
+
+原因：
+
+- 关系状态变化本身就是正式 canon 事实，不应只停留在 narrative scene
+- 追加新节点比覆写旧节点更能保住关系链
+- 这让真实 workspace 能稳定形成 `allied@5 -> ruptured@7` 这类历史序列，为后续 reconciliation / repeat beat 提供确定性基础
+
+影响：
+
+- `demo-workspace/idea-20260602-004` 已能真实闭环到 `apply`
+- `state/canon-index.json` 的 relationship layer 不再只承载单点关系，而开始承载有序 history
+- 下一阶段的重点继续前移到：多段 relationship history chain 之后，后续 `和解 / 再结盟` 等复归型 beat 应怎样继续落库
+
+## 2026-06-02
+
+### 决策：same-state relationship repeat beat 默认保留旧 `canon relationship`，只新增 scene
+
+当前状态：
+
+- `demo-workspace/idea-20260602-003` 暴露出一个真实 case：第 5 章已经有正式 `结盟` 关系记录，第 6 章又出现“再次结盟”
+- 旧版 planner 会把这类 case 收敛成 `update-existing-relationship`
+- 如果直接 apply，既有 `canon relationship` 会被整体改写到更晚章节，语义上等于抹掉“首次结盟发生在第 5 章”这件事
+
+因此这一轮开始：
+
+- 对 same-state repeat beat，如果已有同状态 `canon relationship` 且 wording 明确是“再次/重新/再度”等重复关系 beat，planner 默认不再直接改写旧关系节点
+- planner 改为优先产出一个 `scene-only` 的 gate-resolving input
+- apply 后保留旧 `canon relationship` 章节，只把新的重复关系 beat 落成后续 scene
+
+原因：
+
+- same-state repeat beat 本质上更像“关系再次被叙事确认”，不是“首次关系发生时间被改写”
+- 先保住已有 `canon relationship` 的首次发生章节，语义更稳
+- 这能让 consistency / plan / apply 在真实 workspace 里顺利闭环，而不需要先发明新的 relationship history 数据结构
+
+影响：
+
+- `demo-workspace/idea-20260602-003` 已能真实闭环到 `apply`
+- `state/canon-index.json` 的关系首次节点不会因重复 beat 被误覆写
+- 下一阶段的重点前移到：当关系状态真的发生变化时，何时该追加新的 `canon relationship` history 节点
+
 ## 2026-06-01
 
 ### 决策：`apply_idea_merge` 继续沿用单入口，但要支持一条 idea 一次性消费多条 `merge_input_id`
@@ -55,6 +165,32 @@
 - `demo-workspace/` 这类 `needs-info` case 现在能明确停在 intake 修补层
 - `P0` 验收开始真正区分 `blocked / needs-info / ready`
 - 顶层计划默认继续向 `repair -> plan -> apply` 的集成闭环推进
+
+### 决策：为 `repair-intake` 补一个确定性的字段修补脚本，而不是继续依赖手改 JSON
+
+当前状态：
+
+- `backfill_intake_drafts.py` 只擅长“从现有文本重新推断 draft”
+- 真实卡点往往不是“缺 draft”，而是“缺人类确认后的章节号、地点或待确认问题收口”
+- 如果没有显式写回入口，`repair-intake` 只能停留在状态提示层，无法稳定闭环
+
+因此这一轮补了：
+
+- `scripts/update_intake_draft.py`
+- workspace 层对应的确定性 patch 入口
+- 更新 draft 后自动失效旧 consistency report / merge plan 的规则
+
+原因：
+
+- 人类确认字段本来就是主链路的一部分，不该继续依赖手工改 JSON
+- draft 一旦改了，旧 report / plan 就不再可靠，应该显式失效
+- 这能把 `repair-intake -> check-consistency -> plan-merge -> apply-merge` 真正连成脚本级闭环
+
+影响：
+
+- `repair-intake` 从“提示动作”升级成了“可脚本执行动作”
+- pipeline 不会再继续盯着过期 merge plan 的 `missing_fields`
+- 下一阶段可以更自然地把这条路径推进到真实 workspace 验收
 
 ### 决策：从规则微调优先，切到 `P0` 收口与工作区级验收优先
 

@@ -32,7 +32,7 @@
 
 ## 当前状态
 
-到 `2026-06-01` 为止，主链路已经推进到：
+到 `2026-06-03` 为止，主链路已经推进到：
 
 `ingest -> check-consistency -> plan-merge -> apply-merge -> validate`
 
@@ -120,16 +120,21 @@
 - `demo-workspace/`
   作为持续演化的综合示例
 - `first-workflow-case/`
-  作为第一个独立 workflow 案例，现已完成首轮 `ingest -> check-consistency -> plan-merge -> apply-merge -> validate` 闭环
+  作为第一个独立 workflow 案例，现已完成首轮 `ingest -> check-consistency -> plan-merge -> apply-merge -> validate` 闭环；
+  `demo-workspace/` 也已补齐真实的 multi-input apply、relationship apply、same-state repeat beat 与 reconciliation history 样例
 
 下一步重点不再是补“有没有入口”，而是增强：
 
 - `novel-timeline-merge`
 - `repair-intake -> plan-merge -> apply-merge` 的工作区级集成闭环
-- 更真实的多 merge inputs 组合 apply 覆盖
+- 多段 `relationship` history chain 在“真实状态转移 / 后续复归 / repeat beat”场景下怎样继续追加或复用 history 节点，并与后续 scene 稳定对齐
 - 更细的 timeline-order / knowledge-state 规则
 - 更细的 relationship / world-rule exception 边界
 - grouped summary 与逐条 explainer 的进一步压缩，以及更细的 write-shape token
+
+当前顶层推进框架见：
+
+- `docs/workspace-acceptance-framework.md`
 
 ## 核心结构
 
@@ -206,6 +211,17 @@ python3 scripts/backfill_intake_drafts.py \
   --json
 ```
 
+把人工确认过的字段写回 intake draft：
+
+```bash
+python3 scripts/update_intake_draft.py \
+  --workspace ./demo-workspace \
+  --idea-id idea-20260511-006 \
+  --chapter-hint 6 \
+  --clear-open-questions \
+  --json
+```
+
 重建 HTML 展示页：
 
 ```bash
@@ -236,10 +252,10 @@ python3 scripts/apply_idea_merge.py \
 ```bash
 python3 scripts/apply_idea_merge.py \
   --workspace ./demo-workspace \
-  --idea-id idea-20260511-001 \
+  --idea-id idea-20260602-001 \
   --merge-input-id timeline-merge-001 \
-  --merge-input-id timeline-merge-knowledge-001 \
-  --resolution-note "一次性并入 timeline / outline / canon。"
+  --merge-input-id timeline-merge-know-001 \
+  --resolution-note "一次性并入 timeline / outline / canon knowledge-state。"
 ```
 
 对于 `world-rule conflict`，plan 现在可能生成多种结构化输入。
