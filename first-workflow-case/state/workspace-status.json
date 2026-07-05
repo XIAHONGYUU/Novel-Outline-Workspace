@@ -31,8 +31,8 @@
     "error_count": 0,
     "warning_count": 0,
     "report_path": "/home/zuoky/project2/first-workflow-case/views/validation-report.html",
-    "validated_at": "2026-06-01T12:41:37Z"
+    "validated_at": "2026-07-05T03:12:24Z"
   },
   "recommended_next_step": "继续扩充正式大纲，并在每轮改动后运行 validator。",
-  "updated_at": "2026-06-01T12:41:51Z"
+  "updated_at": "2026-07-05T03:12:24Z"
 }

@@ -4,7 +4,9 @@ from pathlib import Path
 from typing import Any
 
 from .consistency import check_idea_consistency, consistency_report_needs_refresh, load_consistency_report
+from .constraints_review import apply_approved_constraints_review, review_constraints
 from .merge import pending_ideas, plan_idea_merge
+from .reuse_review import apply_approved_reuse_review, review_reuse
 from .workspace import (
     _format_missing_field_labels,
     backfill_intake_drafts,
@@ -24,6 +26,33 @@ def _repair_intake_reason(idea: dict[str, Any], progress: dict[str, Any]) -> str
     if progress.get("open_questions"):
         return f"当前最早一条 pending idea `{title}` 仍有待确认问题，先补 intake 信息再继续 merge。"
     return f"当前最早一条 pending idea `{title}` 还缺可执行信息，先修 intake draft 再继续 merge。"
+
+
+def _constraints_review_reason(idea: dict[str, Any], progress: dict[str, Any]) -> str:
+    title = str(idea.get("title") or progress.get("idea_id") or "pending idea")
+    summary = str(progress.get("constraints_review_summary") or "").strip()
+    policy_summary = str(progress.get("constraints_review_policy_summary") or "").strip()
+    if summary:
+        if policy_summary:
+            return f"当前最早一条 pending idea `{title}` 已有 merge plan，但 constraints 仍需人工复核主体范围。{policy_summary}{summary}"
+        return f"当前最早一条 pending idea `{title}` 已有 merge plan，但 constraints 仍需人工复核主体范围。{summary}"
+    return f"当前最早一条 pending idea `{title}` 已有 merge plan，但 constraints 仍需人工复核主体范围。"
+
+
+def _reuse_review_reason(idea: dict[str, Any], progress: dict[str, Any]) -> str:
+    title = str(idea.get("title") or progress.get("idea_id") or "pending idea")
+    summary = str(progress.get("reuse_review_summary") or "").strip()
+    if summary:
+        return f"当前最早一条 pending idea `{title}` 已有 merge plan，但 event / scene reuse 仍需人工复核。{summary}"
+    return f"当前最早一条 pending idea `{title}` 已有 merge plan，但 event / scene reuse 仍需人工复核。"
+
+
+def _reuse_apply_ready_reason(idea: dict[str, Any], progress: dict[str, Any]) -> str:
+    title = str(idea.get("title") or progress.get("idea_id") or "pending idea")
+    summary = str(progress.get("reuse_review_decision_summary") or "").strip()
+    if summary:
+        return f"当前最早一条 pending idea `{title}` 的 reuse review 已确认，可以直接消费已批准的 ready merge inputs。{summary}"
+    return f"当前最早一条 pending idea `{title}` 的 reuse review 已确认，可以直接消费已批准的 ready merge inputs。"
 
 
 def choose_next_action(workspace: Path) -> dict[str, Any]:
@@ -50,11 +79,11 @@ def choose_next_action(workspace: Path) -> dict[str, Any]:
                 "status": status,
             }
         report = load_consistency_report(workspace, str(target_idea.get("id"))) or {}
-        if report.get("error_count", 0) > 0 or report.get("conflict_count", 0) > 0:
+        if report.get("error_count", 0) > 0:
             return {
                 "workspace": str(workspace),
                 "recommended_action": "check-consistency",
-                "reason": "当前最早的 pending idea 存在 consistency 冲突，应该先处理这条 idea 的报告。",
+                "reason": "当前最早的 pending idea 存在 consistency 硬错误，应该先处理这条 idea 的报告。",
                 "idea_id": target_idea.get("id"),
                 "status": status,
             }
@@ -64,6 +93,41 @@ def choose_next_action(workspace: Path) -> dict[str, Any]:
                 "workspace": str(workspace),
                 "recommended_action": "plan-merge",
                 "reason": f"当前最早一条 pending idea `{target_idea.get('title')}` 已有最新 consistency，但 merge plan 还没跟上，先重跑 plan。",
+                "idea_id": target_idea.get("id"),
+                "status": status,
+            }
+        if progress.get("constraints_review_apply_ready"):
+            return {
+                "workspace": str(workspace),
+                "recommended_action": "apply-merge",
+                "reason": (
+                    f"当前最早一条 pending idea `{target_idea.get('title')}` 的 constraints review 已确认，"
+                    "可以直接消费已批准的 ready merge inputs。"
+                ),
+                "idea_id": target_idea.get("id"),
+                "status": status,
+            }
+        if progress.get("reuse_review_apply_ready"):
+            return {
+                "workspace": str(workspace),
+                "recommended_action": "apply-merge",
+                "reason": _reuse_apply_ready_reason(target_idea, progress),
+                "idea_id": target_idea.get("id"),
+                "status": status,
+            }
+        if progress.get("needs_constraints_review"):
+            return {
+                "workspace": str(workspace),
+                "recommended_action": "review-constraints",
+                "reason": _constraints_review_reason(target_idea, progress),
+                "idea_id": target_idea.get("id"),
+                "status": status,
+            }
+        if progress.get("needs_reuse_review"):
+            return {
+                "workspace": str(workspace),
+                "recommended_action": "review-reuse",
+                "reason": _reuse_review_reason(target_idea, progress),
                 "idea_id": target_idea.get("id"),
                 "status": status,
             }
@@ -160,6 +224,46 @@ def run_outline_workspace_pipeline(
         plan = plan_idea_merge(workspace, target_idea_id)
         result["executed"] = True
         result["merge_plan"] = plan
+        return result
+
+    if selected_action == "review-constraints":
+        if not target_idea_id:
+            raise ValueError("review-constraints requires a pending idea.")
+        review = review_constraints(workspace, target_idea_id)
+        result["executed"] = True
+        result["constraints_review"] = review
+        result["merge_plan"] = review.get("merge_plan")
+        return result
+
+    if selected_action == "review-reuse":
+        if not target_idea_id:
+            raise ValueError("review-reuse requires a pending idea.")
+        review = review_reuse(workspace, target_idea_id)
+        result["executed"] = True
+        result["reuse_review"] = review
+        result["merge_plan"] = review.get("merge_plan")
+        return result
+
+    if selected_action == "apply-merge":
+        if not target_idea_id:
+            raise ValueError("apply-merge requires a pending idea.")
+        progress = inspect_pending_idea_progress(workspace, {"id": target_idea_id})
+        if progress.get("constraints_review_apply_ready"):
+            applied = apply_approved_constraints_review(workspace, target_idea_id)
+            result["executed"] = True
+            result["constraints_review"] = applied["constraints_review"]
+            result["merge_result"] = applied["merge_result"]
+            return result
+        if progress.get("reuse_review_apply_ready"):
+            applied = apply_approved_reuse_review(workspace, target_idea_id)
+            result["executed"] = True
+            result["reuse_review"] = applied["reuse_review"]
+            result["merge_result"] = applied["merge_result"]
+            return result
+        applied = apply_approved_constraints_review(workspace, target_idea_id)
+        result["executed"] = True
+        result["constraints_review"] = applied["constraints_review"]
+        result["merge_result"] = applied["merge_result"]
         return result
 
     raise ValueError(f"unsupported action: {selected_action}")

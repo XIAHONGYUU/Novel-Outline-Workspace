@@ -25,6 +25,7 @@
 - 数据模型
 - 校验规则
 - `P0` 收口与 acceptance framework
+- `P0` 已知限制清单
 
 ### `scripts/`
 
@@ -37,6 +38,10 @@
 - `update_intake_draft.py`
 - `validate_workspace.py`
 - `plan_idea_merge.py`
+- `review_constraints.py`
+- `review_reuse.py`
+- `resolve_constraints_review.py`
+- `resolve_reuse_review.py`
 - `apply_idea_merge.py`
 - `run_outline_workspace_pipeline.py`
 
@@ -105,10 +110,12 @@ workspace-template/
 │   └── README.md
 ├── state/
 │   ├── canon-index.json
+│   ├── constraint-reviews/
 │   ├── consistency-checks/
 │   ├── idea-log.json
 │   ├── intake-drafts/
 │   ├── merge-plans/
+│   ├── reuse-reviews/
 │   └── workspace-status.json
 ├── timeline/
 │   └── events.json

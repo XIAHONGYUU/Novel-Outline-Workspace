@@ -39,6 +39,8 @@
 - `summary`
 - `target_files`
 - `missing_fields`
+- `warnings`
+- `review_tokens`
 - `can_apply_directly`
 - `resolves_blocked_gate`
 - `requires_override`
@@ -60,16 +62,29 @@
 - `target_files`
 - `merge_input_id`
 - `readiness`
+- `review_policy`
+- `review_policy_summary`
 - `planned_writes`
 - `source_signals`
 - `missing_fields`
+- `warnings`
+- `review_tokens`
 
 其中：
 
 - `merge_input_id` 用于把 domain explainer 指回某条具体 merge input
 - `readiness` 用于表示当前是 `ready / needs-info / needs-review / blocked-by-gate / planned`
+- `review_policy` 用于把 `needs-review` 类 constraints action 的默认处理策略显式写出来，例如 `mixed-subjects-local-signal-review-only`
+- `review_policy_summary` 用于给状态层、pipeline 与人工协作界面提供一句可直接展示的策略摘要
 - `planned_writes` 用于把这一层准备写什么字段直接列出来
 - `source_signals` 用于说明这条 explainer 是由哪些 intake / consistency 信号驱动的
+- `warnings` 用于把“当前为什么不能静默复用旧记录”直接抬到 plan 层
+- `review_tokens` 用于把需要单独人工复核的 planner 信号固化成稳定 token，方便状态层和后续 review report 继续消费
+
+当 `proposed_actions[].domain == "constraints"` 且 `readiness == "needs-review"` 时，
+`planned_writes` 现在也可能显式带出策略 token，例如：
+
+- `policy=mixed-subjects-local-signal-review-only`
 
 当前常见策略包括：
 
@@ -97,6 +112,189 @@
 - `world_rule_exception_object_key`
 - `world_rule_exception_reading_chapter`
 
+当某条 plan 里出现 reuse 歧义时，当前还会在顶层额外聚合：
+
+- `review_tokens`
+
+它用于把 `timeline_merge_inputs` 里的歧义信号直接抬到 plan 顶层，方便 pipeline / review report 直接读取。
+
+## `state/constraint-reviews/<idea-id>.json`
+
+记录一条 idea 进入 `review-constraints` 后的结构化复核报告。
+
+建议字段包括：
+
+- `idea_id`
+- `title`
+- `status`
+- `review_required`
+- `review_state`
+- `review_status_summary`
+- `review_policy`
+- `review_policy_summary`
+- `constraints_summary`
+- `review_checklist`
+- `ready_merge_inputs`
+- `blocked_merge_inputs`
+- `action_matrix`
+- `consistency_gate`
+- `merge_plan_path`
+- `merge_plan_view_path`
+- `decision`
+- `applied_result`
+- `created_at`
+
+其中：
+
+- `review_required` 用于显式区分“这条 idea 当前是否真的停在 review-only 终点”
+- `review_state` 用于显式区分当前 report 处于 `needs-review`、`approved-ready-merge-inputs`、`applied` 等哪一种阶段
+- `review_status_summary` 用于给状态层、脚本输出和人工查看提供一句稳定摘要，避免已消费的 report 仍看起来像待处理 case
+- `review_policy` / `review_policy_summary` 用于把当前默认策略矩阵写成稳定 token 与可展示摘要
+- `review_checklist` 用于给人工复核提供一组确定性检查项
+- `ready_merge_inputs` 用于列出“复核通过后可以直接消费”的 merge inputs，避免这类 case 被误打回 `repair-intake`
+- `action_matrix` 用于把 `constraints / timeline / outline / canon` 各层当前的 `readiness` 一次性摊平，方便判断这条 idea 是“纯 review-only”还是“review + ready inputs 共存”
+- `decision` 用于把人工复核后的确定性写回结果正式落进同一份 state 产物，而不是只停在口头备注
+- `applied_result` 用于在 decision 已被消费后保留一份轻量的执行结果摘要，而不必回头重算 live review 状态
+
+当 `decision` 已写回时，当前常见字段包括：
+
+- `status`
+- `summary`
+- `resolution_note`
+- `reviewer`
+- `selected_merge_input_ids`
+- `selected_merge_inputs`
+- `apply_ready`
+- `merge_plan_created_at`
+- `merge_plan_fingerprint`
+- `decided_at`
+- `applied`
+- `applied_at`
+- `applied_merge_input_ids`
+
+其中：
+
+- `status=approved-ready-merge-inputs` 表示这条 review-only path 已被人工确认，可直接续到 `apply-merge`
+- `status=rejected` 表示这条 review-only path 已被人工确认不进入 apply，并会把 idea 正式移出 pending path
+- `selected_merge_input_ids` / `selected_merge_inputs` 用于显式列出这次确认后允许消费的 ready merge inputs
+- `apply_ready=true` 表示当前决策仍与最新 merge plan 对齐，pipeline 可以直接消费
+- `merge_plan_fingerprint` 用于按计划内容而不是按重跑时间判断决策是否仍对齐，避免同一条 plan 仅因重新生成就被误判失效
+- `merge_plan_created_at` 当前主要保留为审计信息，说明这份 decision 最初是基于哪一轮 plan 产生的
+- `applied=true` 表示这份 review 决策已经被真正消费过，不应再继续作为 pending apply 入口
+
+当 `review_state=applied` 或 `review_state=rejected` 时，当前 report 还会遵循这些约定：
+
+- `review_required=false`
+- `review_checklist=[]`
+- `ready_merge_inputs=[]`
+- `blocked_merge_inputs=[]`
+- `consistency_gate.status=consumed` 或 `closed`
+
+也就是这份 report 会从“待人工复核的 live review”切成“已消费的 review history”。
+
+当 `review_state=rejected` 时，当前还可能额外带：
+
+- `rejected_result`
+
+它通常包含：
+
+- `status`
+- `resolution_note`
+- `validation_ok`
+- `validation_report_path`
+- `validated_at`
+
+## `state/reuse-reviews/<idea-id>.json`
+
+记录一条 idea 进入 `review-reuse` 后的结构化复核报告。
+
+建议字段包括：
+
+- `idea_id`
+- `title`
+- `status`
+- `review_required`
+- `review_state`
+- `review_status_summary`
+- `review_summary`
+- `review_tokens`
+- `review_checklist`
+- `review_merge_inputs`
+- `remaining_review_merge_inputs`
+- `ready_merge_inputs`
+- `blocked_merge_inputs`
+- `action_matrix`
+- `consistency_gate`
+- `merge_plan_path`
+- `merge_plan_view_path`
+- `decision`
+- `applied_result`
+- `created_at`
+
+其中：
+
+- `review_tokens` 当前主要用于稳定标识 `reuse-ambiguity-linked-scenes` / `reuse-ambiguity-linked-events`
+- `review_merge_inputs` 用于单独列出真正停在 reuse 复核上的那几条 merge inputs
+- `remaining_review_merge_inputs` 用于在 live review 与 archived history 里都显式保留“这轮没有被消费、仍待后续收口的 reuse 歧义输入”，避免只剩一条 resolution note
+- `review_status_summary` 用于给状态层、脚本输出和人工查看提供一句稳定摘要，区分 live review、已确认待 apply、已消费归档等不同阶段
+- `ready_merge_inputs` / `blocked_merge_inputs` 用于把“同一条 idea 里哪些输入在 reuse 歧义之外已结构完整、哪些仍缺字段”一次性摊平；
+  对 `review-reuse` 来说，`ready_merge_inputs` 当前表示“复核 reuse 歧义后即可继续消费”的输入，
+  不要求这些输入在原始 gate 下已经是 `can_apply_directly=true`
+- `decision` 用于把 reuse 复核后的确定性写回结果正式落进同一份 state 产物，而不是只停在口头备注
+- `applied_result` 用于在 decision 已被消费后保留一份轻量的执行结果摘要
+
+当 `decision` 已写回时，当前常见字段包括：
+
+- `status`
+- `summary`
+- `resolution_note`
+- `reviewer`
+- `selected_merge_input_ids`
+- `selected_merge_inputs`
+- `remaining_review_merge_input_ids`
+- `remaining_review_merge_inputs`
+- `apply_ready`
+- `merge_plan_created_at`
+- `merge_plan_fingerprint`
+- `decided_at`
+- `applied`
+- `applied_at`
+- `applied_merge_input_ids`
+
+其中：
+
+- `status=approved-ready-merge-inputs` 表示这条 reuse review path 已被人工确认，可直接续到 `apply-merge`
+- `status=rejected` 表示这条 reuse review path 已被人工确认不进入 apply，并会把 idea 正式移出 pending path
+- `selected_merge_input_ids` / `selected_merge_inputs` 用于显式列出这次确认后允许消费的非歧义 merge inputs
+- `remaining_review_merge_input_ids` / `remaining_review_merge_inputs` 用于显式列出这次 decision 之后仍保留为后续待处理项的 reuse 歧义输入
+- `apply_ready=true` 表示当前决策仍与最新 merge plan 对齐，pipeline 可以直接消费
+- `merge_plan_fingerprint` 用于按计划内容而不是按重跑时间判断决策是否仍对齐，避免同一条 plan 仅因重新生成就被误判失效
+- `applied=true` 表示这份 reuse review 决策已经被真正消费过，不应再继续作为 pending apply 入口
+
+当 `review_state=applied` 或 `review_state=rejected` 时，当前 report 还会遵循这些约定：
+
+- `review_required=false`
+- `review_checklist=[]`
+- `review_merge_inputs=[]`
+- `remaining_review_merge_inputs` 保留归档时仍未消费的 reuse 歧义输入
+- `ready_merge_inputs=[]`
+- `blocked_merge_inputs=[]`
+- `consistency_gate.status=consumed` 或 `closed`
+
+也就是这份 report 会从“待人工复核的 live review”切成“已消费的 review history”。
+
+当 `review_state=rejected` 时，当前还可能额外带：
+
+- `rejected_result`
+
+它通常包含：
+
+- `status`
+- `resolution_note`
+- `validation_ok`
+- `validation_report_path`
+- `validated_at`
+
 ## `state/intake-drafts/<idea-id>.json`
 
 记录一条 raw idea 在 intake 阶段推断出的结构化草案。
@@ -113,6 +311,10 @@
 - `canon_update_candidates`
 - `open_questions`
 - `confidence`
+
+其中：
+
+- `timeline_candidates[].participant_candidates` 除了作为 intake 提示外，当前也可作为 timeline merge 的 `participant_ids` 回填来源；这类回填主要用于保留某些 `mixed-subjects` 草案的原始形态，同时避免它们被误打回 `repair-intake`
 
 ## `state/consistency-checks/<idea-id>.json`
 
@@ -157,6 +359,21 @@
 - `exception_scope_base`
 - `exception_subject_scope`
 - `exception_match_mode`
+
+对于 `knowledge_claims`，当前单条 claim 通常还会包含：
+
+- `subject_id`
+- `subject_name`
+- `verb`
+- `object_phrase`
+- `object_key`
+- `chapter`
+- `first_claim`
+- `is_recap`
+
+其中：
+
+- `is_recap=true` 表示这条 claim 更像“同一主体对同一事实的后续再次确认 / 再次知道”，后续 planner 可据此优先收敛到 `scene-only` repeat beat，而不是改写既有 `knowledge-state` 首次节点
 
 在 `proposed_actions` 的 constraints grouped summary 里，如果某条 rule 已被正式 exception 覆盖，当前通常会写成：
 

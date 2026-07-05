@@ -10,6 +10,7 @@ from .workspace import (
     _load_scene_records,
     _safe,
     default_canon_index,
+    infer_location_candidates,
     now_iso,
     read_json,
     write_json,
@@ -268,6 +269,34 @@ def _title_keys_match(left: str, right: str) -> bool:
     if left == right:
         return True
     return min(len(left), len(right)) >= 4 and (left in right or right in left)
+
+
+def _location_keys_match(left: str, right: str) -> bool:
+    left_key = _normalize_text(left)
+    right_key = _normalize_text(right)
+    if not left_key or not right_key:
+        return False
+    if left_key == right_key:
+        return True
+    return left_key in right_key or right_key in left_key
+
+
+def _scene_location_candidates(record: dict[str, Any]) -> list[str]:
+    scene = record.get("scene", {}) if isinstance(record, dict) else {}
+    note_candidates = infer_location_candidates("", str(scene.get("notes") or ""))
+    if note_candidates:
+        return note_candidates
+    return infer_location_candidates(str(scene.get("title") or ""), str(scene.get("notes") or ""))
+
+
+def _record_location_candidates(record: dict[str, Any]) -> list[str]:
+    record_type = str(record.get("record_type") or "").strip()
+    if record_type == "event":
+        location = str(record.get("location") or "").strip()
+        return [location] if location else []
+    if record_type == "scene":
+        return _scene_location_candidates(record)
+    return []
 
 
 def _canonicalize_knowledge_match_text(text: str) -> str:
@@ -888,6 +917,7 @@ def _extract_draft_knowledge_claims(
                             continue
                         object_phrase = _trim_knowledge_object(window[verb_index + len(verb) :], terms)
                         object_key = _normalize_knowledge_object(object_phrase, terms)
+                        prefix_window = window[max(0, verb_index - 4) : verb_index]
                         key = (char_id, object_key)
                         if object_key and key not in seen:
                             seen.add(key)
@@ -900,6 +930,7 @@ def _extract_draft_knowledge_claims(
                                     "object_key": object_key,
                                     "chapter": draft_chapter,
                                     "first_claim": first_claim,
+                                    "is_recap": any(token in prefix_window for token in KNOWLEDGE_RECAP_TOKENS),
                                 }
                             )
                             matched = True
@@ -922,6 +953,7 @@ def _extract_draft_knowledge_claims(
                             "object_key": signal["object_key"],
                             "chapter": draft_chapter,
                             "first_claim": first_claim,
+                            "is_recap": bool(signal.get("is_recap")),
                         }
                     )
     return _dedupe_subject_knowledge_claims(claims)
@@ -946,6 +978,9 @@ def _check_title_based_conflicts(
         event_label = _normalize_text(event.get("label") or event.get("id"))
         if not any(_title_keys_match(title_key, event_label) for title_key in title_keys):
             continue
+        existing_location = str(event.get("location") or "").strip()
+        if draft_location and existing_location and not _location_keys_match(draft_location, existing_location):
+            continue
         existing_chapter = event.get("reading_chapter")
         if draft_chapter is not None and isinstance(existing_chapter, int) and existing_chapter != draft_chapter:
             _append_issue(
@@ -962,7 +997,6 @@ def _check_title_based_conflicts(
                     "direction": "chapter-drift",
                 },
             )
-        existing_location = str(event.get("location") or "").strip()
         if draft_location and existing_location and existing_location != draft_location:
             _append_issue(
                 issues,
@@ -983,6 +1017,10 @@ def _check_title_based_conflicts(
         scene_title = _normalize_text(scene.get("title") or scene.get("id"))
         if not any(_title_keys_match(title_key, scene_title) for title_key in title_keys):
             continue
+        if draft_location:
+            scene_locations = _scene_location_candidates(record)
+            if scene_locations and not any(_location_keys_match(draft_location, candidate) for candidate in scene_locations):
+                continue
         existing_chapter = record.get("chapter")
         if draft_chapter is not None and isinstance(existing_chapter, int) and existing_chapter != draft_chapter:
             _append_issue(
@@ -1002,6 +1040,7 @@ def _check_title_based_conflicts(
 
 
 def _check_knowledge_state_conflicts(
+    draft: dict[str, Any],
     knowledge_claims: list[dict[str, Any]],
     canon_index: dict[str, Any],
     character_terms_by_id: dict[str, list[str]],
@@ -1011,6 +1050,7 @@ def _check_knowledge_state_conflicts(
 ) -> None:
     if not knowledge_claims:
         return
+    draft_location = _primary_location_candidate(draft)
 
     records: list[dict[str, Any]] = []
     for event in events:
@@ -1020,6 +1060,7 @@ def _check_knowledge_state_conflicts(
                 "record_id": event.get("id"),
                 "chapter": event.get("reading_chapter"),
                 "participants": set(event.get("participants", [])),
+                "location": str(event.get("location") or "").strip(),
                 "path": "timeline/events.json",
                 "text": f"{event.get('label', '')}\n{event.get('notes', '')}",
             }
@@ -1032,6 +1073,7 @@ def _check_knowledge_state_conflicts(
                 "record_id": scene.get("id"),
                 "chapter": record.get("chapter"),
                 "participants": set(scene.get("characters", [])),
+                "scene": scene,
                 "path": "outline/scene-index.json",
                 "text": f"{scene.get('title', '')}\n{scene.get('notes', '')}",
             }
@@ -1076,6 +1118,12 @@ def _check_knowledge_state_conflicts(
             )
             if matched_signal is None:
                 continue
+            if draft_location:
+                record_locations = _record_location_candidates(record)
+                if record_locations and not any(
+                    _location_keys_match(draft_location, candidate) for candidate in record_locations
+                ):
+                    continue
             candidate = {"record": record, "signal": matched_signal}
             if record_chapter == claim["chapter"]:
                 same_chapter_matches.append(candidate)
@@ -1100,6 +1148,32 @@ def _check_knowledge_state_conflicts(
             record = prior_match["record"]
             matched_signal = prior_match["signal"]
             record_chapter = int(record["chapter"])
+            if claim.get("is_recap"):
+                message = (
+                    f"角色 `{subject_name}` 关于 `{matched_signal['object_phrase']}` 的正式知情记录已在 "
+                    f"{record['record_type']} `{record['record_id']}` 第 {record_chapter} 章落地；"
+                    f"这条 idea 更像第 {claim['chapter']} 章的后续 recap beat。"
+                )
+                _append_issue(
+                    issues,
+                    "warning",
+                    "knowledge-state-conflict",
+                    message,
+                    str(record["path"]),
+                    {
+                        "subject_id": subject_id,
+                        "subject_name": subject_name,
+                        "record_type": record["record_type"],
+                        "record_id": record["record_id"],
+                        "draft_chapter": claim["chapter"],
+                        "existing_chapter": record_chapter,
+                        "knowledge_object": matched_signal["object_phrase"],
+                        "direction": "knowledge-repeat-beat",
+                        "claim_verb": claim["verb"],
+                        "record_verb": matched_signal["verb"],
+                    },
+                )
+                continue
             qualifier = "首次" if claim["first_claim"] else "关键"
             message = (
                 f"角色 `{subject_name}` 在 {record['record_type']} `{record['record_id']}` 第 {record_chapter} 章已经出现 "
@@ -2123,7 +2197,7 @@ def check_idea_consistency(workspace: Path, idea_id: str) -> dict[str, Any]:
     resolved_character_ids = _resolve_character_mentions(draft, canon_index, issues)
     knowledge_claims = _extract_draft_knowledge_claims(draft, resolved_character_ids, character_terms_by_id, id_to_name)
     _check_title_based_conflicts(draft, events, scene_records, issues)
-    _check_knowledge_state_conflicts(knowledge_claims, canon_index, character_terms_by_id, events, scene_records, issues)
+    _check_knowledge_state_conflicts(draft, knowledge_claims, canon_index, character_terms_by_id, events, scene_records, issues)
     _check_first_meeting_conflicts(draft, resolved_character_ids, id_to_name, events, scene_records, issues)
     _check_relationship_history_conflicts(draft, canon_index, resolved_character_ids, id_to_name, events, scene_records, issues)
     _check_world_rule_conflicts(draft, workspace, canon_index, events, knowledge_claims, issues, exemptions)

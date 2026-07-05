@@ -32,7 +32,7 @@
 
 ## 当前状态
 
-到 `2026-06-03` 为止，主链路已经推进到：
+到 `2026-07-05` 为止，`P0` 主链路已经正式收口，默认工作流是：
 
 `ingest -> check-consistency -> plan-merge -> apply-merge -> validate`
 
@@ -48,6 +48,18 @@
   `plan_idea_merge` 已开始输出结构化 `timeline_merge_inputs`，`apply_idea_merge` 可直接按一条或一组 `merge_input_id` 消费
 - domain-specific plan explainers
   `plan_idea_merge` 的 `proposed_actions` 已开始输出更接近执行层的 domain explainers，而不只是泛化的 domain 提示
+- constraints review report layer
+  `review_constraints.py` 已能把 `review-constraints` 路径落成独立 JSON 产物，显式写出 `review_policy / review_checklist / ready_merge_inputs`；
+  `resolve_constraints_review.py` 现已可把人工确认结果确定性写回同一份 state，并让 pipeline 继续消费已批准的 ready inputs；
+  review decision 当前按 `merge_plan_fingerprint` 而不是按重跑时间校验 freshness，因此同一条 plan 重跑后不会平白丢失可执行状态；
+  decision 一旦被消费，`constraint-review` report 会自动切成 archive 语义，不再回显成 stale review
+- reuse review report layer
+  `review_reuse.py` 已能把 `review-reuse` 路径落成独立 JSON 产物，显式写出 `review_tokens / review_checklist / review_merge_inputs`；
+  `resolve_reuse_review.py` 现已可把人工确认结果确定性写回同一份 state，并让 pipeline 继续消费已批准的非歧义 merge inputs；
+  对“只批准部分 ready inputs”的 case，归档后的 report 现在也会继续保留结构化 `remaining_review_merge_inputs`，显式标出仍待后续收口的 reuse 歧义；
+  reuse review decision 当前同样按 `merge_plan_fingerprint` 校验 freshness，而不是按重跑时间失效；
+  decision 一旦被消费，`reuse-review` report 也会自动切成 archive 语义，不再回显成 live review；
+  pipeline `auto` 在带冲突的 idea 上也不再被 `check-consistency` 卡死，只要已有最新 report，就会继续走到 `plan-merge -> review-reuse -> apply-merge`
 - canon relationship layer
   `state/canon-index.json` 已开始承载结构化 `relationships`，关系类 merge input 可直接写入
 - canon knowledge / exception layer
@@ -95,7 +107,7 @@
   如果当前 case 不需要继续动 timeline / outline，grouped summary 也会继续收紧成只补 `annotate-existing-exception-record / annotate-existing-rule-note`，
   对 `prior-exception + local-signal`，如果这轮连可落地的 `event_id / scene_id` 都没有，grouped summary 也会优先只保留 `review-exception-evidence`，不再误报成需要改 `exception chain`，
   而对 `prior-exception + claim-match` 的叙事型 idea，如果这轮虽然还没落到具体 event / scene，但已经是明确的剧情 beat，grouped summary 仍会保留 `carry-forward-exception-note`，
-  但如果同一个 `claim-match` 叙事型 case 同时落在 `split-subjects / mixed-subjects`，grouped summary 会退回 `annotate-existing-rule-note + review-subject-scope`，不再默认共用同一条 exception chain，
+  但如果同一个 `claim-match` 叙事型 case 同时落在 `mixed-subjects`，grouped summary 仍会退回 `annotate-existing-rule-note + review-subject-scope`；而对 `split-subjects + narrative targets`，planner 现在已经能保留规则主体既有 exception，并把额外主体的 knowledge-state 直接落库，
   对 `local-signal` 也开始区分“别的主体只出现在窗外”与“主体窗口内已经混进别的主体”：前者继续只做 `review-exception-evidence`，后者会额外升级到 `review-subject-scope`，
   同样的说明层也开始回流到 `same-chapter exemption`：如果 `same-chapter` 的 review case 仍涉及 timeline / outline 落地，grouped summary 会直接写出 `review-same-chapter-beat / review-same-chapter-scene`，
   如果同一条 idea 同时还有 `world-rule conflict`，grouped summary 现在还会先提一条 `shared-world-rule-context`，把 conflict 行和 exemption 行共同拥有的 `domains / targets` 上提，
@@ -121,20 +133,21 @@
   作为持续演化的综合示例
 - `first-workflow-case/`
   作为第一个独立 workflow 案例，现已完成首轮 `ingest -> check-consistency -> plan-merge -> apply-merge -> validate` 闭环；
-  `demo-workspace/` 也已补齐真实的 multi-input apply、relationship apply、same-state repeat beat 与 reconciliation history 样例
+  `demo-workspace/` 也已补齐真实的 multi-input apply、relationship apply、same-state repeat beat、reconciliation history、knowledge-state lifecycle，以及 world-rule exception 的 `first exception / prior-exception continuity / split-subjects direct closure / mixed-subjects review-only closure` 样例
 
-下一步重点不再是补“有没有入口”，而是增强：
+当前下一阶段重点不再是补 `P0` 闭环，而是增强：
 
+- `review-constraints` 的 deterministic writeback
 - `novel-timeline-merge`
 - `repair-intake -> plan-merge -> apply-merge` 的工作区级集成闭环
-- 多段 `relationship` history chain 在“真实状态转移 / 后续复归 / repeat beat”场景下怎样继续追加或复用 history 节点，并与后续 scene 稳定对齐
-- 更细的 timeline-order / knowledge-state 规则
-- 更细的 relationship / world-rule exception 边界
+- 更细的 timeline-order / world-rule exception 规则
+- 更细的 world-rule / mixed-subject exception 边界
 - grouped summary 与逐条 explainer 的进一步压缩，以及更细的 write-shape token
 
 当前顶层推进框架见：
 
 - `docs/workspace-acceptance-framework.md`
+- `docs/p0-known-limitations.md`
 
 ## 核心结构
 
@@ -191,6 +204,57 @@ python3 scripts/ingest_idea.py \
 
 ```bash
 python3 scripts/validate_workspace.py --workspace ./demo-workspace --json
+```
+
+生成一条 idea 的 constraints review 报告：
+
+```bash
+python3 scripts/review_constraints.py \
+  --workspace ./demo-workspace \
+  --idea-id idea-20260605-003 \
+  --json
+```
+
+生成一条 idea 的 reuse review 报告：
+
+```bash
+python3 scripts/review_reuse.py \
+  --workspace ./demo-workspace \
+  --idea-id idea-20260605-003 \
+  --json
+```
+
+写回一条 idea 的 reuse review 决策：
+
+```bash
+python3 scripts/resolve_reuse_review.py \
+  --workspace ./demo-workspace \
+  --idea-id idea-20260605-003 \
+  --decision approved-ready-merge-inputs \
+  --merge-input-id timeline-merge-003 \
+  --resolution-note "先放行已确认无歧义的 merge input，剩余 scene/event 关联后续再修。" \
+  --json
+```
+
+把 constraints review 的人工确认结果写回工作区：
+
+```bash
+python3 scripts/resolve_constraints_review.py \
+  --workspace ./demo-workspace \
+  --idea-id idea-20260605-003 \
+  --resolution-note "复核后仅放行第11章 event/scene，保持既有 exception 主体范围不变。" \
+  --json
+```
+
+如果复核后决定这条 idea 当前不进入 apply，也可以直接写成正式 `rejected` 决策：
+
+```bash
+python3 scripts/resolve_constraints_review.py \
+  --workspace ./demo-workspace \
+  --idea-id idea-20260605-003 \
+  --decision rejected \
+  --resolution-note "复核后决定这条 mixed-subject case 当前不进入 apply。" \
+  --json
 ```
 
 对单条 idea 运行 consistency check：
@@ -328,6 +392,12 @@ python3 scripts/run_outline_workspace_pipeline.py \
 
 如果某条 pending idea 的 consistency 是 `warning-only`，但 merge plan 仍缺 `chapter_number` 这类关键字段，
 orchestrator 现在会优先推荐 `repair-intake`，提示先补章节 / 时间节点，再继续 merge。
+
+如果某条 pending idea 的 consistency 已 clean，但 merge plan 的 `constraints` explainer 仍是 `needs-review`，
+orchestrator 现在会优先推荐 `review-constraints`，提示先复核 `world-rule / exception` 的主体范围，再决定是否真正 apply。
+
+如果这条 `review-constraints` 已被人工确认并写回 `approved-ready-merge-inputs`，
+orchestrator 现在会直接推荐 `apply-merge`，继续消费已批准的 ready merge inputs。
 
 ## 当前原则
 

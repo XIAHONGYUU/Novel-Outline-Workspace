@@ -16,6 +16,27 @@
   -> 写回状态与 HTML 视图
 ```
 
+当 `constraints` explainer 明确进入 `needs-review` 时，当前推荐子路径是：
+
+```text
+plan-merge
+  -> review-constraints
+  -> resolve-constraints-review
+  -> apply-merge
+  -> validate
+```
+
+当 `review` explainer 明确进入 `needs-review` 时，当前推荐子路径是：
+
+```text
+check-consistency
+  -> plan-merge
+  -> review-reuse
+  -> resolve-reuse-review
+  -> apply-merge
+  -> validate
+```
+
 ## 当前默认推进框架
 
 从 `P0` 当前阶段开始，默认不再按“哪里像是还能补规则”来推进，而是按一组固定的 `acceptance tracks` 推进：

@@ -1,6 +1,6 @@
 # Workspace Acceptance Framework
 
-最后更新：2026-06-03
+最后更新：2026-06-06
 
 这份文档不是记录单条规则，也不是记录单个样例细节。
 
@@ -153,16 +153,72 @@
 
 - 在已有 `reconciled` 节点之后，再处理 `再次结盟 / 再次和解` 一类 beat
 
+当前状态：
+
+- 已完成
+- 样例：`demo-workspace/idea-20260603-002`
+
+收口结论：
+
+- 在已有 `reconciled` 节点之后，`再次和解 / 再次结盟` 这类 same-state repeat beat 仍默认回到 `scene-only`
+- 不覆写最近的 `canon relationship` 节点
+- rerun consistency 后冲突可清空
+
+### Track 9: Knowledge-State Lifecycle
+
+目标：
+
+- 把 `knowledge-state` 也从“单次写入能力”推进成“真实 lifecycle 验收轨道”
+
 待回答问题：
 
-- 它是否仍应默认 `scene-only`
-- 它是否需要附着到最近的 `reconciled` 节点解释
-- 它何时会被视为新的状态变化而不是重复叙事 beat
+- 第一条正式 `knowledge-state` 节点怎样在真实 workspace 稳定落库
+- 后续同一主体对同一事实的 recap / repeat beat，是否应只停留在 scene / timeline
+- 新主体在更晚章节得知同一事实时，怎样与既有节点共存而不互相覆盖
 
 当前状态：
 
-- 未完成
-- 这是当前最合适的下一条真实验收轨道
+- 已完成
+- 样例：
+  - `demo-workspace/idea-20260604-003`：first node
+  - `demo-workspace/idea-20260604-001`：same-subject later recap
+  - `demo-workspace/idea-20260604-004`：second-subject later learns
+
+收口结论：
+
+- 第一条正式 `knowledge-state` 节点现在已能在真实 workspace 中稳定落成 `timeline / outline + canon`
+- same-subject later recap 默认会保留既有 `knowledge-state` 首次节点，只把后续确认 beat 落成 `scene-only`
+- 新主体在更晚章节得知同一事实时，会追加新的 chapter-scoped `knowledge-state` 节点，而不会覆写旧主体记录
+
+### Track 10: World-Rule Exception Lifecycle
+
+目标：
+
+- 把 `world-rule exception` 也从“规则检测 + planner explainers”推进成“真实 workspace lifecycle 验收轨道”
+
+待回答问题：
+
+- 第一条正式 exception 节点怎样在真实 workspace 稳定落库
+- 已有 prior-exception 之后，后续叙事 beat 怎样继续沿用 / 注释 / 改写 exception chain
+- mixed-subject / split-scope case 在已有 exception 基础上怎样稳定收口，而不误共用同一条 exception 记录
+
+当前状态：
+
+- 已完成
+- 已完成样例：
+  - `demo-workspace/idea-20260604-005`：first exception
+  - `demo-workspace/idea-20260604-006`：prior-exception continuity
+  - `demo-workspace/idea-20260605-002`：prior-exception + split-subjects claim-match direct closure
+  - `demo-workspace/idea-20260605-003`：prior-exception + mixed-subjects local-signal review-only closure
+
+阶段结论：
+
+- 第一条正式 exception 节点现在已能在真实 workspace 中稳定落成 `timeline / outline + canon knowledge-state + world_rule_exception`
+- 已有 prior-exception 之后，同一主体的后续 recap / repeat beat 现在会默认沿用既有 exception，并保留原始 `knowledge-state / exception` 首次节点，只把后续 beat 落成 `scene-only`
+- `split-subjects` 现在也已有真实 direct closure：规则主体保留既有 exception，额外主体的新 knowledge-state 可以与 event / scene 一次性落库
+- `mixed-subjects + local-signal` 现在也已有真实 review-only closure：planner、`workspace-status.json` 与 pipeline `auto` 会统一给出 `review-constraints`，并显式附带 `mixed-subjects-local-signal-review-only` 策略摘要
+- `timeline_candidates[].participant_candidates` 现在也已成为 timeline merge 的正式参与者回填来源，因此这类 mixed-subject 样例不会再被 `repair-intake` 之类次级 blocker 抢优先级
+- 对当前 `P0` 阶段而言，`World-Rule Exception Lifecycle` 已不再缺主处理矩阵：同主体 continuity、`split-subjects` direct closure、`mixed-subjects` review-only closure 三条路径都已有真实 workspace 样例
 
 ## 默认推进顺序
 
@@ -183,6 +239,21 @@
 - 明确下一条该补的是哪一条 acceptance track
 - 把零散样例推进，逐步沉成可复用的阶段框架
 
-因此，下一步默认不是继续散着补细节，而是：
+因此，下一步默认不是继续在 `Track 10` 里横向补更多 `world-rule` 细粒度 case，而是：
 
-`优先补 Track 8：Post-Reconciliation Repeat Beat`
+`做一次 P0 收口审计，把 review-only path、已知限制与阶段边界统一写清楚`
+
+当前这一步已落到：
+
+- `docs/p0-known-limitations.md`
+
+因此再下一步默认应转向：
+
+`判断 P0 是否已满足正式收口条件`
+
+当前结论：
+
+- `P0` 已正式收口
+- 下一阶段默认转入：
+
+`P1：执行层厚化与 deterministic review writeback`

@@ -4,7 +4,15 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .consistency import consistency_report_needs_refresh, load_consistency_report
+from .consistency import (
+    _knowledge_objects_match,
+    _location_keys_match,
+    _normalize_text,
+    _record_location_candidates,
+    _title_keys_match,
+    consistency_report_needs_refresh,
+    load_consistency_report,
+)
 from .workspace import (
     _html_page,
     _safe,
@@ -152,14 +160,14 @@ def _target_file_domains(target_files: list[str]) -> list[str]:
 
 
 def _readiness_for_input(item: dict[str, Any], gate: dict[str, Any]) -> str:
-    if item.get("can_apply_directly"):
-        return "ready"
     if item.get("missing_fields"):
         return "needs-info"
     if item.get("requires_override") or (gate.get("status") == "blocked" and not item.get("resolves_blocked_gate")):
         return "blocked-by-gate"
-    if gate.get("status") == "warning":
+    if item.get("warnings") or gate.get("status") == "warning":
         return "needs-review"
+    if item.get("can_apply_directly"):
+        return "ready"
     return "planned"
 
 
@@ -194,6 +202,10 @@ def _source_signals_for_input(domain: str, item: dict[str, Any], draft: dict[str
             signals.append(f"claim: {claim.get('subject_name')} 第{claim.get('chapter')}章 {claim.get('verb')}{claim.get('object_phrase')}")
     if domain == "constraints" and item.get("source_issue_code") == "world-rule-conflict":
         signals.append("consistency: world-rule conflict")
+    for review_token in item.get("review_tokens", []):
+        token = str(review_token).strip()
+        if token:
+            signals.append(f"review-token: {token}")
     return signals
 
 
@@ -218,6 +230,50 @@ def _timeline_summary_from_input(item: dict[str, Any]) -> tuple[str, list[str]]:
     else:
         summary = f"在 `timeline/events.json` 新增或更新事件 `{event_label}`，并挂到第 {chapter or '?'} 章。"
     return summary, writes
+
+
+def _reuse_review_explainer(timeline_merge_inputs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    review_tokens = list(
+        dict.fromkeys(
+            str(token)
+            for item in timeline_merge_inputs
+            for token in item.get("review_tokens", [])
+            if str(token).strip().startswith("reuse-ambiguity-")
+        )
+    )
+    if not review_tokens:
+        return None
+    warnings = list(
+        dict.fromkeys(
+            str(warning)
+            for item in timeline_merge_inputs
+            for warning in item.get("warnings", [])
+            if str(warning).strip()
+        )
+    )
+    target_files = sorted(
+        {
+            str(path)
+            for item in timeline_merge_inputs
+            if any(str(token).strip().startswith("reuse-ambiguity-") for token in item.get("review_tokens", []))
+            for path in item.get("target_files", [])
+            if str(path).strip()
+        }
+    )
+    return {
+        "domain": "review",
+        "action": "先复核 reuse 歧义，再决定是否继续 apply。",
+        "summary": "当前 merge plan 含有 reuse 歧义，需要先人工确认事件/场景关联对象。",
+        "target_files": target_files,
+        "reason": "当前 merge plan 含有 reuse 歧义，需要先人工确认事件/场景关联对象。",
+        "confidence": "high",
+        "merge_input_id": None,
+        "readiness": "needs-review",
+        "planned_writes": [f"review_token: {token}" for token in review_tokens],
+        "source_signals": warnings or [f"review-token: {token}" for token in review_tokens],
+        "review_tokens": review_tokens,
+        "warnings": warnings,
+    }
 
 
 def _outline_summary_from_input(item: dict[str, Any]) -> tuple[str, list[str]]:
@@ -401,6 +457,99 @@ def _draft_domains_for_exemption_review(draft: dict[str, Any]) -> set[str]:
         kind = str(draft.get("kind") or "").strip().lower()
         domains.update(KIND_DOMAIN_MAP.get(kind, []))
     return domains
+
+
+def _world_rule_review_policy(
+    *,
+    exception_scope_bases: set[str],
+    exception_subject_scopes: set[str],
+    exception_match_modes: set[str],
+) -> tuple[str, str] | None:
+    if (
+        "prior-exception" in exception_scope_bases
+        and "mixed-subjects" in exception_subject_scopes
+        and "local-signal" in exception_match_modes
+    ):
+        return (
+            "mixed-subjects-local-signal-review-only",
+            "mixed-subjects + local-signal 当前默认只做 review，不自动扩写 exception 或 canon knowledge-state。",
+        )
+    return None
+
+
+def _knowledge_claim_identity(claim: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(claim.get("subject_id") or "").strip(),
+        str(claim.get("object_key") or claim.get("object_phrase") or "").strip(),
+    )
+
+
+def _claim_matches_exception_object(claim: dict[str, Any], details: dict[str, Any]) -> bool:
+    claim_object = str(claim.get("object_key") or claim.get("object_phrase") or "").strip()
+    exception_object = str(
+        details.get("matched_exception_object_key")
+        or details.get("matched_exception_object_phrase")
+        or details.get("rule_object")
+        or ""
+    ).strip()
+    if not claim_object or not exception_object:
+        return False
+    return _knowledge_objects_match(claim_object, exception_object)
+
+
+def _direct_resolvable_prior_exception_split_subject_candidates(
+    report: dict[str, Any],
+    draft: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    draft_domains = _draft_domains_for_exemption_review(draft)
+    if not ({"timeline", "outline"} & draft_domains):
+        return {}
+
+    claims = [
+        claim
+        for claim in report.get("knowledge_claims", [])
+        if str(claim.get("subject_id") or "").strip()
+        and str(claim.get("object_key") or claim.get("object_phrase") or "").strip()
+    ]
+    if len(claims) < 2:
+        return {}
+
+    candidates: dict[str, dict[str, Any]] = {}
+    for item in report.get("exemptions", []):
+        if str(item.get("code") or "") != "world-rule-exemption-applied":
+            continue
+        details = item.get("details", {}) if isinstance(item.get("details"), dict) else {}
+        if (
+            str(details.get("exception_scope_base") or "").strip() != "prior-exception"
+            or str(details.get("exception_subject_scope") or "").strip() != "split-subjects"
+            or str(details.get("exception_match_mode") or "").strip() != "claim-match"
+        ):
+            continue
+        rule_id = str(details.get("rule_id") or "").strip()
+        matched_subject_id = str(details.get("matched_exception_subject_id") or "").strip()
+        if not rule_id or not matched_subject_id:
+            continue
+        matching_claims = [claim for claim in claims if _claim_matches_exception_object(claim, details)]
+        if len(matching_claims) < 2:
+            continue
+        rule_claims = [
+            claim
+            for claim in matching_claims
+            if str(claim.get("subject_id") or "").strip() == matched_subject_id
+        ]
+        non_rule_claims = [
+            claim
+            for claim in matching_claims
+            if str(claim.get("subject_id") or "").strip() != matched_subject_id
+        ]
+        if len(rule_claims) != 1 or len(non_rule_claims) != 1:
+            continue
+        candidates[rule_id] = {
+            "details": details,
+            "rule_claim": rule_claims[0],
+            "non_rule_claim": non_rule_claims[0],
+        }
+    return candidates
 
 
 def _shared_values_for_rules(rule_map: dict[str, set[str]], rule_ids: list[str]) -> set[str]:
@@ -626,6 +775,9 @@ def _constraints_group_explainer(
     exception_scope_bases_by_rule: dict[str, set[str]] = {}
     exception_subject_scopes_by_rule: dict[str, set[str]] = {}
     exception_match_modes_by_rule: dict[str, set[str]] = {}
+    review_policy_by_rule: dict[str, str] = {}
+    review_policy_summary_by_rule: dict[str, str] = {}
+    direct_split_subject_candidates = _direct_resolvable_prior_exception_split_subject_candidates(report, draft)
     for item in exemptions:
         details = item.get("details", {}) if isinstance(item.get("details"), dict) else {}
         rule_id = str(details.get("rule_id") or "").strip()
@@ -701,6 +853,24 @@ def _constraints_group_explainer(
             direct_write_shapes_by_rule.setdefault(rule_id, set()).update(direct_write_shapes)
             continue
 
+        if rule_id in direct_split_subject_candidates:
+            reuse_bucket_by_rule[rule_id] = "direct"
+            exemption_direct_by_rule[rule_id] = 1
+            direct_impacts = {
+                "canon:reuse-exception",
+                "constraints:reuse-exception",
+                "constraints:preserve-rule-subject-exception-scope",
+            }
+            direct_write_shapes = {
+                "canon:reuse-existing-exception-record",
+                "constraints:reuse-existing-exception-note",
+            }
+            impacts_by_rule.setdefault(rule_id, set()).update(direct_impacts)
+            direct_impacts_by_rule.setdefault(rule_id, set()).update(direct_impacts)
+            write_shapes_by_rule.setdefault(rule_id, set()).update(direct_write_shapes)
+            direct_write_shapes_by_rule.setdefault(rule_id, set()).update(direct_write_shapes)
+            continue
+
         exemption_review_by_rule[rule_id] = 1
         review_write_shapes = _world_rule_exemption_write_shapes(
             workspace,
@@ -743,6 +913,16 @@ def _constraints_group_explainer(
             review_impacts.add("constraints:review-subject-scope")
         if "local-signal" in exception_match_modes:
             review_impacts.add("canon:review-exception-evidence")
+        review_policy = _world_rule_review_policy(
+            exception_scope_bases=exception_scope_bases,
+            exception_subject_scopes=exception_subject_scopes,
+            exception_match_modes=exception_match_modes,
+        )
+        if review_policy is not None:
+            policy_key, policy_summary = review_policy
+            review_policy_by_rule[rule_id] = policy_key
+            review_policy_summary_by_rule[rule_id] = policy_summary
+            review_impacts.add("constraints:review-only-policy")
         impacts_by_rule.setdefault(rule_id, set()).update(review_impacts)
         review_impacts_by_rule.setdefault(rule_id, set()).update(review_impacts)
         write_shapes_by_rule.setdefault(rule_id, set()).update(review_write_shapes)
@@ -1629,6 +1809,9 @@ def _constraints_group_explainer(
             segments.append(exception_subject_scope_token)
         if exception_match_mode_token and exception_match_mode_token not in shared_scope_tokens:
             segments.append(exception_match_mode_token)
+        review_policy_token = str(review_policy_by_rule.get(rule_id) or "").strip()
+        if review_policy_token:
+            segments.append(f"policy={review_policy_token}")
         if line_domains:
             segments.append(f"domains={', '.join(sorted(line_domains))}")
         if display_line_impacts:
@@ -1683,8 +1866,12 @@ def _constraints_group_explainer(
         summary = f"当前这条 idea 同时触发了 {len(rule_ids)} 条 world-rule；先按 rule 分组复核各自的 cutoff / exception 处理策略。"
         action = "先按 rule 分组复核 constraints 层的冲突与处理方向。"
     else:
-        summary = f"这条 idea 命中的 {len(rule_ids)} 条 world-rule 已有正式 exception 覆盖；优先沿用既有解释链，并只复核需要人工确认的主体范围。"
-        action = "复核已落地的 world-rule exception。"
+        if overall_readiness == "ready":
+            summary = f"这条 idea 命中的 {len(rule_ids)} 条 world-rule 已有正式 exception 覆盖；沿用既有解释链即可，额外主体按独立 canon 写入处理。"
+            action = "沿用已落地的 world-rule exception。"
+        else:
+            summary = f"这条 idea 命中的 {len(rule_ids)} 条 world-rule 已有正式 exception 覆盖；优先沿用既有解释链，并只复核需要人工确认的主体范围。"
+            action = "复核已落地的 world-rule exception。"
 
     source_signals: list[str] = []
     if conflict_rule_ids:
@@ -1700,6 +1887,16 @@ def _constraints_group_explainer(
         "confidence": "high",
         "merge_input_id": None,
         "readiness": overall_readiness,
+        "review_policy": (
+            next(iter(set(review_policy_by_rule.values())))
+            if review_policy_by_rule and len(set(review_policy_by_rule.values())) == 1
+            else None
+        ),
+        "review_policy_summary": (
+            next(iter(set(review_policy_summary_by_rule.values())))
+            if review_policy_summary_by_rule and len(set(review_policy_summary_by_rule.values())) == 1
+            else None
+        ),
         "planned_writes": planned_writes,
         "source_signals": source_signals,
     }
@@ -1761,6 +1958,20 @@ def _dedupe_domain_explainers(explainers: list[dict[str, Any]]) -> list[dict[str
                 if str(item).strip()
             }
         )
+        merged["warnings"] = list(
+            dict.fromkeys(
+                str(item)
+                for item in [*current.get("warnings", []), *explainer.get("warnings", [])]
+                if str(item).strip()
+            )
+        )
+        merged["review_tokens"] = list(
+            dict.fromkeys(
+                str(item)
+                for item in [*current.get("review_tokens", []), *explainer.get("review_tokens", [])]
+                if str(item).strip()
+            )
+        )
         merged["_duplicate_count"] = int(current.get("_duplicate_count") or 1) + int(explainer.get("_duplicate_count") or 1)
         merge_input_ids = {
             str(item.get("merge_input_id"))
@@ -1817,6 +2028,9 @@ def _domain_explainers(
     timeline_merge_inputs: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     explainers: list[dict[str, Any]] = []
+    reuse_review_explainer = _reuse_review_explainer(timeline_merge_inputs)
+    if reuse_review_explainer is not None:
+        explainers.append(reuse_review_explainer)
     if gate["status"] in {"missing", "stale"}:
         explainers.append(
             {
@@ -1877,6 +2091,8 @@ def _domain_explainers(
                     "planned_writes": planned_writes,
                     "source_signals": _source_signals_for_input(domain, item, draft, report),
                     "missing_fields": item.get("missing_fields", []),
+                    "warnings": item.get("warnings", []),
+                    "review_tokens": item.get("review_tokens", []),
                 }
             )
 
@@ -1998,6 +2214,10 @@ def _first_text(items: list[Any]) -> str | None:
     return next((str(item).strip() for item in items if str(item).strip()), None)
 
 
+def _draft_content_text(draft: dict[str, Any], idea: dict[str, Any]) -> str:
+    return str(draft.get("content") or idea.get("content") or "").strip()
+
+
 def _character_lookup(canon_index: dict[str, Any]) -> tuple[dict[str, str], dict[str, str]]:
     token_to_id: dict[str, str] = {}
     id_to_name: dict[str, str] = {}
@@ -2017,7 +2237,13 @@ def _character_lookup(canon_index: dict[str, Any]) -> tuple[dict[str, str], dict
 def _resolve_participant_ids(draft: dict[str, Any], canon_index: dict[str, Any]) -> list[str]:
     token_to_id, _ = _character_lookup(canon_index)
     output: list[str] = []
-    for mention in draft.get("character_mentions", []):
+    candidate_tokens: list[str] = []
+    candidate_tokens.extend(str(item) for item in draft.get("character_mentions", []))
+    for timeline_candidate in draft.get("timeline_candidates", []):
+        if not isinstance(timeline_candidate, dict):
+            continue
+        candidate_tokens.extend(str(item) for item in timeline_candidate.get("participant_candidates", []))
+    for mention in candidate_tokens:
         char_id = token_to_id.get(_normalize_token(mention))
         if char_id and char_id not in output:
             output.append(char_id)
@@ -2051,6 +2277,93 @@ def _scene_by_id(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         if scene_id:
             output[str(scene_id)] = record
     return output
+
+
+def _matching_existing_event_id_for_draft(
+    events: list[dict[str, Any]],
+    *,
+    event_label: str | None,
+    draft_location: str | None,
+) -> str | None:
+    normalized_label = _normalize_text(event_label)
+    if not normalized_label:
+        return None
+    matches: list[str] = []
+    for event in events:
+        existing_label = _normalize_text(event.get("label") or event.get("id"))
+        if not _title_keys_match(normalized_label, existing_label):
+            continue
+        existing_location = str(event.get("location") or "").strip()
+        if draft_location and existing_location and not _location_keys_match(draft_location, existing_location):
+            continue
+        event_id = str(event.get("id") or "").strip()
+        if event_id:
+            matches.append(event_id)
+    deduped = list(dict.fromkeys(matches))
+    if len(deduped) == 1:
+        return deduped[0]
+    return None
+
+
+def _compatible_scene_event_ids_for_draft(
+    scene_event_ids: list[str],
+    event_map: dict[str, dict[str, Any]],
+    *,
+    event_label: str | None,
+    draft_location: str | None,
+) -> tuple[list[str], bool]:
+    normalized_label = _normalize_text(event_label)
+    output: list[str] = []
+    for event_id in scene_event_ids:
+        event = event_map.get(str(event_id))
+        if not event:
+            continue
+        existing_label = _normalize_text(event.get("label") or event.get("id"))
+        if normalized_label and not _title_keys_match(normalized_label, existing_label):
+            continue
+        existing_location = str(event.get("location") or "").strip()
+        if draft_location and existing_location and not _location_keys_match(draft_location, existing_location):
+            continue
+        resolved_event_id = str(event.get("id") or "").strip()
+        if resolved_event_id and resolved_event_id not in output:
+            output.append(resolved_event_id)
+    return output, len(output) > 1
+
+
+def _linked_scene_character_ids_for_event(
+    scene_records: list[dict[str, Any]],
+    *,
+    event_id: str,
+    event_label: str | None,
+    draft_location: str | None,
+) -> tuple[list[str], bool]:
+    normalized_label = _normalize_text(event_label)
+    matches: list[tuple[str, ...]] = []
+    for record in scene_records:
+        scene = record.get("scene", {})
+        linked_event_ids = [str(item).strip() for item in scene.get("event_ids", []) if str(item).strip()]
+        if event_id not in linked_event_ids:
+            continue
+        scene_title = _normalize_text(scene.get("title") or scene.get("id"))
+        if normalized_label and not _title_keys_match(normalized_label, scene_title):
+            continue
+        if draft_location:
+            scene_locations = _record_location_candidates({"record_type": "scene", "scene": scene})
+            if scene_locations and not any(_location_keys_match(draft_location, location) for location in scene_locations):
+                continue
+        character_ids = tuple(
+            str(item).strip()
+            for item in scene.get("characters", [])
+            if str(item).strip()
+        )
+        if character_ids:
+            matches.append(character_ids)
+    deduped = list(dict.fromkeys(matches))
+    if len(deduped) == 1:
+        return list(deduped[0]), False
+    if len(deduped) > 1:
+        return [], True
+    return [], False
 
 
 def _suggest_chronological_index(events: list[dict[str, Any]], preferred: int | None) -> int:
@@ -2203,6 +2516,7 @@ def _default_timeline_apply_args(
     events = _event_records(workspace)
     participant_ids = _resolve_participant_ids(draft, canon_index)
     _, id_to_name = _character_lookup(canon_index)
+    draft_content = _draft_content_text(draft, idea)
 
     chapter_hint = _first_int(draft.get("chapter_hints", []))
     location = _first_text(draft.get("location_candidates", []))
@@ -2229,7 +2543,7 @@ def _default_timeline_apply_args(
                 "reading_chapter": chapter_hint,
                 "location": location,
                 "participant_ids": participant_ids,
-                "event_notes": idea.get("content", ""),
+                "event_notes": draft_content,
             }
         )
         target_files.append("timeline/events.json")
@@ -2249,7 +2563,7 @@ def _default_timeline_apply_args(
                 "scene_status": "planned",
                 "scene_character_ids": participant_ids,
                 "scene_event_ids": scene_event_ids,
-                "scene_notes": idea.get("content", ""),
+                "scene_notes": draft_content,
             }
         )
         target_files.extend(["outline/scene-index.json", "outline/master-outline.md"])
@@ -2363,25 +2677,25 @@ def _build_default_relationship_merge_input(
     }
 
 
-def _build_default_knowledge_merge_input(
+def _build_knowledge_merge_input_for_claim(
     workspace: Path,
     idea: dict[str, Any],
-    report: dict[str, Any],
+    claim: dict[str, Any],
     gate: dict[str, Any],
+    *,
+    input_index: int,
 ) -> dict[str, Any] | None:
-    if any(str(issue.get("code") or "") == "knowledge-state-conflict" for issue in report.get("issues", [])):
-        return None
-    claims = report.get("knowledge_claims", [])
-    if not claims or idea.get("kind") not in {"reveal", "twist", "backstory"}:
-        return None
-    claim = next((item for item in claims if item.get("subject_id") and item.get("object_key")), None)
-    if claim is None:
-        return None
-    canon_index = read_json(workspace / "state/canon-index.json", default_canon_index(workspace.name))
     subject_id = str(claim.get("subject_id") or "").strip()
     object_key = str(claim.get("object_key") or "").strip()
+    if not subject_id or not object_key:
+        return None
+    canon_index = read_json(workspace / "state/canon-index.json", default_canon_index(workspace.name))
     existing_state = _existing_knowledge_state_match(canon_index, subject_id, object_key)
     chapter = claim.get("chapter")
+    if existing_state is not None and claim.get("is_recap") and isinstance(chapter, int):
+        existing_chapter = existing_state.get("reading_chapter")
+        if isinstance(existing_chapter, int) and existing_chapter < chapter:
+            return None
     knowledge_state_id = (
         str(existing_state.get("id"))
         if existing_state and existing_state.get("id")
@@ -2391,7 +2705,7 @@ def _build_default_knowledge_merge_input(
     if not isinstance(chapter, int):
         missing_fields.append("knowledge_reading_chapter")
     return {
-        "id": "timeline-merge-know-001",
+        "id": f"timeline-merge-know-{input_index:03d}",
         "kind": "timeline-merge-input",
         "strategy": "update-existing-knowledge-state" if existing_state else "upsert-canon-knowledge-state",
         "summary": f"把 `{claim.get('subject_name')}` 关于 `{claim.get('object_phrase')}` 的知情变化补进 canon 机器真相源。",
@@ -2415,6 +2729,43 @@ def _build_default_knowledge_merge_input(
             "knowledge_notes": idea.get("content", ""),
         },
     }
+
+
+def _build_default_knowledge_merge_inputs(
+    workspace: Path,
+    idea: dict[str, Any],
+    draft: dict[str, Any],
+    report: dict[str, Any],
+    gate: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if any(str(issue.get("code") or "") == "knowledge-state-conflict" for issue in report.get("issues", [])):
+        return []
+    claims = report.get("knowledge_claims", [])
+    if not claims or idea.get("kind") not in {"reveal", "twist", "backstory"}:
+        return []
+
+    selected_claims: list[dict[str, Any]] = []
+    direct_split_candidates = _direct_resolvable_prior_exception_split_subject_candidates(report, draft)
+    if len(direct_split_candidates) == 1:
+        candidate = next(iter(direct_split_candidates.values()))
+        selected_claims = [candidate["non_rule_claim"]]
+    else:
+        claim = next((item for item in claims if item.get("subject_id") and item.get("object_key")), None)
+        if claim is not None:
+            selected_claims = [claim]
+
+    inputs: list[dict[str, Any]] = []
+    for index, claim in enumerate(selected_claims, start=1):
+        merge_input = _build_knowledge_merge_input_for_claim(
+            workspace,
+            idea,
+            claim,
+            gate,
+            input_index=index,
+        )
+        if merge_input is not None:
+            inputs.append(merge_input)
+    return inputs
 
 
 def _summary_for_issue_input(issue: dict[str, Any], issue_code: str, record_id: str | None) -> str:
@@ -2442,6 +2793,9 @@ def _patch_suggestion_ids(report: dict[str, Any], issue_code: str) -> list[str]:
 
 def _build_issue_driven_timeline_merge_inputs(
     workspace: Path,
+    idea: dict[str, Any],
+    domains: list[str],
+    draft: dict[str, Any],
     report: dict[str, Any],
     gate: dict[str, Any],
 ) -> list[dict[str, Any]]:
@@ -2449,6 +2803,9 @@ def _build_issue_driven_timeline_merge_inputs(
     scenes = _scene_records(workspace)
     event_map = _event_by_id(events)
     scene_map = _scene_by_id(scenes)
+    canon_index = read_json(workspace / "state/canon-index.json", default_canon_index(workspace.name))
+    _, id_to_name = _character_lookup(canon_index)
+    default_apply_args, _, _ = _default_timeline_apply_args(workspace, idea, draft, domains)
     inputs: list[dict[str, Any]] = []
     seen_records: set[tuple[str, str, str]] = set()
 
@@ -2469,25 +2826,57 @@ def _build_issue_driven_timeline_merge_inputs(
         apply_args: dict[str, Any] = {}
         target_files: list[str] = []
         missing_fields: list[str] = []
+        item_warnings: list[str] = list(gate.get("warnings", []))
+        item_review_tokens: list[str] = []
 
         if record_type == "event":
             event = event_map.get(record_id)
             if not event:
                 continue
+            draft_location = _first_text(draft.get("location_candidates", []))
+            existing_location = str(event.get("location") or "").strip()
+            if draft_location and existing_location and not _location_keys_match(draft_location, existing_location):
+                continue
+            event_label = str(event.get("label") or "").strip()
+            linked_scene_character_ids, linked_scene_character_ids_ambiguous = _linked_scene_character_ids_for_event(
+                scenes,
+                event_id=record_id,
+                event_label=event_label,
+                draft_location=draft_location,
+            )
+            participant_ids = default_apply_args.get("participant_ids") or linked_scene_character_ids
+            if not participant_ids and linked_scene_character_ids_ambiguous:
+                participant_ids = []
+                item_warnings.append(
+                    f"事件 `{record_id}` 命中了多条角色集合冲突的 linked scenes，参与者需要人工确认。"
+                )
+                item_review_tokens.append("reuse-ambiguity-linked-scenes")
+            elif not participant_ids:
+                participant_ids = list(event.get("participants", []))
             reading_chapter = details.get("draft_chapter") if isinstance(details.get("draft_chapter"), int) else event.get("reading_chapter")
             location = details.get("draft_location")
             if not isinstance(location, str) or not location.strip():
-                location = str(event.get("location") or "").strip() or None
+                location = existing_location or None
             chronological_index = event.get("chronological_index")
-            if not isinstance(chronological_index, int):
+            if (
+                issue_code == "timeline-order-conflict"
+                and isinstance(reading_chapter, int)
+                and reading_chapter != event.get("reading_chapter")
+            ):
+                chronological_index = _suggest_chronological_index(
+                    [item for item in events if str(item.get("id") or "") != record_id],
+                    reading_chapter,
+                )
+            elif not isinstance(chronological_index, int):
                 chronological_index = _suggest_chronological_index(events, reading_chapter if isinstance(reading_chapter, int) else None)
             apply_args = {
                 "event_id": record_id,
-                "event_label": event.get("label"),
+                "event_label": event_label,
                 "chronological_index": chronological_index,
                 "reading_chapter": reading_chapter,
                 "location": location,
-                "participant_ids": list(event.get("participants", [])),
+                "participant_ids": participant_ids,
+                "event_notes": default_apply_args.get("event_notes") or str(event.get("notes") or ""),
             }
             target_files = ["timeline/events.json"]
             if not event.get("label"):
@@ -2503,20 +2892,58 @@ def _build_issue_driven_timeline_merge_inputs(
                 continue
             scene = record.get("scene", {})
             chapter_number = details.get("draft_chapter") if isinstance(details.get("draft_chapter"), int) else record.get("chapter")
+            scene_status = default_apply_args.get("scene_status") or scene.get("status") or "planned"
+            draft_location = _first_text(draft.get("location_candidates", []))
+            scene_event_label = str(default_apply_args.get("event_label") or scene.get("title") or "").strip()
+            linked_event_id = _matching_existing_event_id_for_draft(
+                events,
+                event_label=scene_event_label,
+                draft_location=draft_location,
+            )
+            linked_event = event_map.get(linked_event_id) if linked_event_id else None
+            linked_participant_ids = list(linked_event.get("participants", [])) if linked_event else []
+            scene_character_ids = (
+                default_apply_args.get("scene_character_ids")
+                or linked_participant_ids
+                or list(scene.get("characters", []))
+            )
+            scene_pov = (
+                default_apply_args.get("scene_pov")
+                or (id_to_name.get(linked_participant_ids[0]) if linked_participant_ids else None)
+                or scene.get("pov")
+            )
+            compatible_existing_event_ids = _compatible_scene_event_ids_for_draft(
+                list(scene.get("event_ids", [])),
+                event_map,
+                event_label=scene_event_label,
+                draft_location=draft_location,
+            )
+            compatible_event_ids, compatible_event_ids_ambiguous = compatible_existing_event_ids
+            scene_event_ids = [linked_event_id] if linked_event_id else (
+                compatible_event_ids if len(compatible_event_ids) == 1 else []
+            )
+            if not linked_event_id and compatible_event_ids_ambiguous:
+                item_warnings.append(
+                    f"场景 `{record_id}` 命中了多条同样兼容的旧事件，事件关联需要人工确认。"
+                )
+                item_review_tokens.append("reuse-ambiguity-linked-events")
             apply_args = {
                 "chapter_number": chapter_number,
                 "scene_id": record_id,
                 "scene_title": scene.get("title"),
-                "scene_pov": scene.get("pov"),
-                "scene_status": scene.get("status") or "planned",
-                "scene_character_ids": list(scene.get("characters", [])),
-                "scene_event_ids": list(scene.get("event_ids", [])),
+                "scene_pov": scene_pov,
+                "scene_status": scene_status,
+                "scene_character_ids": scene_character_ids,
+                "scene_event_ids": scene_event_ids,
+                "scene_notes": default_apply_args.get("scene_notes") or str(scene.get("notes") or ""),
             }
             target_files = ["outline/scene-index.json", "outline/master-outline.md"]
             if not scene.get("title"):
                 missing_fields.append("scene_title")
             if not isinstance(chapter_number, int):
                 missing_fields.append("chapter_number")
+            if not scene_event_ids and compatible_event_ids_ambiguous:
+                missing_fields.append("scene_event_ids")
             strategy = "update-existing-scene"
         else:
             continue
@@ -2533,7 +2960,8 @@ def _build_issue_driven_timeline_merge_inputs(
                 "missing_fields": missing_fields,
                 "can_apply_directly": gate.get("can_apply_merge", False) and not missing_fields,
                 "requires_override": gate.get("status") == "blocked",
-                "warnings": list(gate.get("warnings", [])),
+                "warnings": item_warnings,
+                "review_tokens": item_review_tokens,
                 "resolution_note_suggestion": str(issue.get("message") or ""),
                 "apply_args": apply_args,
             }
@@ -2543,10 +2971,14 @@ def _build_issue_driven_timeline_merge_inputs(
 
 def _build_issue_driven_knowledge_merge_inputs(
     workspace: Path,
+    idea: dict[str, Any],
+    draft: dict[str, Any],
+    domains: list[str],
     report: dict[str, Any],
     gate: dict[str, Any],
 ) -> list[dict[str, Any]]:
     canon_index = read_json(workspace / "state/canon-index.json", default_canon_index(workspace.name))
+    default_apply_args, default_targets, default_missing_fields = _default_timeline_apply_args(workspace, idea, draft, domains)
     claims = report.get("knowledge_claims", [])
     claim_map = {
         (str(item.get("subject_id") or ""), str(item.get("object_key") or "")): item
@@ -2561,7 +2993,8 @@ def _build_issue_driven_knowledge_merge_inputs(
         if issue_code not in KNOWLEDGE_RELEVANT_ISSUES:
             continue
         details = issue.get("details", {}) if isinstance(issue.get("details"), dict) else {}
-        if str(details.get("direction") or "") != "knowledge-advance":
+        direction = str(details.get("direction") or "")
+        if direction not in {"knowledge-advance", "knowledge-repeat-beat"}:
             continue
         subject_id = str(details.get("subject_id") or "").strip()
         if not subject_id:
@@ -2583,6 +3016,36 @@ def _build_issue_driven_knowledge_merge_inputs(
         if not object_key:
             continue
         existing_state = _existing_knowledge_state_match(canon_index, subject_id, object_key)
+        if direction == "knowledge-repeat-beat":
+            scene_apply_args = dict(default_apply_args)
+            scene_targets = list(default_targets)
+            scene_missing_fields = list(default_missing_fields)
+            if scene_apply_args.get("scene_id") and scene_targets:
+                inputs.append(
+                    {
+                        "id": f"timeline-merge-know-repeat-{len(inputs) + 1:03d}",
+                        "kind": "timeline-merge-input",
+                        "strategy": "create-event-and-scene",
+                        "summary": (
+                            f"保留既有知情记录 `{existing_state.get('id') if existing_state else details.get('record_id')}` 的 canon 首次节点，"
+                            f"仅把 `{idea.get('title')}` 作为后续知情 recap beat 并入 scene。"
+                        ),
+                        "target_files": scene_targets,
+                        "source_issue_code": issue_code,
+                        "source_patch_suggestion_ids": _patch_suggestion_ids(report, issue_code),
+                        "missing_fields": scene_missing_fields,
+                        "can_apply_directly": not scene_missing_fields,
+                        "requires_override": False,
+                        "resolves_blocked_gate": not scene_missing_fields,
+                        "resolves_issue_codes": [issue_code] if not scene_missing_fields else [],
+                        "warnings": list(gate.get("warnings", [])),
+                        "resolution_note_suggestion": (
+                            f"保留第 {details.get('existing_chapter')} 章既有知情记录，只把这条后续知情 beat 落成 scene。"
+                        ),
+                        "apply_args": scene_apply_args,
+                    }
+                )
+            continue
         knowledge_state_id = (
             str(existing_state.get("id"))
             if existing_state and existing_state.get("id")
@@ -2755,6 +3218,7 @@ def _build_issue_driven_world_rule_merge_inputs(
     constraints = read_json(workspace / "constraints/constraints.json", {"rules": []})
     rule_map = {str(item.get("id")): item for item in constraints.get("rules", []) if item.get("id")}
     default_apply_args, default_targets, default_missing_fields = _default_timeline_apply_args(workspace, idea, draft, domains)
+    draft_content = _draft_content_text(draft, idea)
     if not default_apply_args.get("event_id"):
         return inputs
 
@@ -2781,8 +3245,8 @@ def _build_issue_driven_world_rule_merge_inputs(
             "chronological_index": _suggest_chronological_index(events, delayed_chapter if isinstance(delayed_chapter, int) else None),
             "reading_chapter": delayed_chapter,
             "chapter_number": delayed_chapter,
-            "event_notes": f"{idea.get('content', '')}（按硬约束延后到第 {delayed_chapter} 章。）" if isinstance(delayed_chapter, int) else idea.get("content", ""),
-            "scene_notes": f"{idea.get('content', '')}（按硬约束延后到第 {delayed_chapter} 章。）" if isinstance(delayed_chapter, int) else idea.get("content", ""),
+            "event_notes": f"{draft_content}（按硬约束延后到第 {delayed_chapter} 章。）" if isinstance(delayed_chapter, int) else draft_content,
+            "scene_notes": f"{draft_content}（按硬约束延后到第 {delayed_chapter} 章。）" if isinstance(delayed_chapter, int) else draft_content,
         }
         delay_missing_fields = [field for field in default_missing_fields if field not in {"reading_chapter", "chapter_number"}]
         if not isinstance(delayed_chapter, int):
@@ -2915,8 +3379,8 @@ def _build_timeline_merge_inputs(
     draft = _load_intake_draft(workspace, str(idea.get("id")))
     report = load_consistency_report(workspace, str(idea.get("id"))) or {}
     inputs: list[dict[str, Any]] = []
-    inputs.extend(_build_issue_driven_timeline_merge_inputs(workspace, report, gate))
-    inputs.extend(_build_issue_driven_knowledge_merge_inputs(workspace, report, gate))
+    inputs.extend(_build_issue_driven_timeline_merge_inputs(workspace, idea, domains, draft, report, gate))
+    inputs.extend(_build_issue_driven_knowledge_merge_inputs(workspace, idea, draft, domains, report, gate))
     inputs.extend(_build_issue_driven_relationship_merge_inputs(workspace, idea, draft, domains, report, gate))
     inputs.extend(_build_issue_driven_world_rule_merge_inputs(workspace, idea, draft, domains, report, gate))
 
@@ -2927,9 +3391,7 @@ def _build_timeline_merge_inputs(
     default_relationship_input = _build_default_relationship_merge_input(workspace, idea, draft, gate)
     if default_relationship_input is not None:
         inputs.append(default_relationship_input)
-    default_knowledge_input = _build_default_knowledge_merge_input(workspace, idea, report, gate)
-    if default_knowledge_input is not None:
-        inputs.append(default_knowledge_input)
+    inputs.extend(_build_default_knowledge_merge_inputs(workspace, idea, draft, report, gate))
 
     return _dedupe_merge_inputs(inputs)
 
@@ -3114,6 +3576,22 @@ def plan_idea_merge(workspace: Path, idea_id: str) -> dict[str, Any]:
     report = load_consistency_report(workspace, idea_id) or {}
     intake_summary = _load_intake_draft_summary(workspace, idea_id)
     timeline_merge_inputs = _build_timeline_merge_inputs(workspace, idea, domains, gate)
+    input_warnings = list(
+        dict.fromkeys(
+            str(warning)
+            for item in timeline_merge_inputs
+            for warning in item.get("warnings", [])
+            if str(warning).strip()
+        )
+    )
+    review_tokens = list(
+        dict.fromkeys(
+            str(token)
+            for item in timeline_merge_inputs
+            for token in item.get("review_tokens", [])
+            if str(token).strip()
+        )
+    )
     plan = {
         "idea_id": idea_id,
         "title": idea.get("title"),
@@ -3124,8 +3602,16 @@ def plan_idea_merge(workspace: Path, idea_id: str) -> dict[str, Any]:
         "consistency_gate": gate,
         "intake_summary": intake_summary,
         "timeline_merge_inputs": timeline_merge_inputs,
+        "review_tokens": review_tokens,
         "proposed_actions": _domain_explainers(workspace, idea, domains, gate, draft, report, timeline_merge_inputs),
-        "unresolved_questions": _unresolved_questions(domains) + gate["blockers"] + gate["warnings"],
+        "unresolved_questions": list(
+            dict.fromkeys(
+                _unresolved_questions(domains)
+                + gate["blockers"]
+                + gate["warnings"]
+                + input_warnings
+            )
+        ),
         "created_at": now_iso(),
     }
     plan_path = workspace / "state/merge-plans" / f"{idea_id}.json"

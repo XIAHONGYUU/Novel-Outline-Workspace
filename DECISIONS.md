@@ -2,7 +2,564 @@
 
 这个文件记录会影响项目方向、实现边界和协作方式的关键决策。
 
+## 2026-07-05
+
+### 决策：`review-reuse` 的第一条真实 workspace 验收样例先采用“只消费非歧义旧 event，保留 scene 双关联歧义不自动并入”的收口策略
+
+当前状态：
+
+- `review-reuse` 的 deterministic writeback 已经在 tests 和临时工作区跑通
+- 但如果没有一条真实 workspace case，仍无法确认这条路径在正式 demo 数据上是否会误把“部分可执行”和“剩余歧义”一起吞掉
+- `demo-workspace/idea-20260705-001 档案夜审` 正好暴露了一种典型 reuse ambiguity：
+  - 旧 scene 同时挂了两条同名 event
+  - 其中一条旧 event 只是章节前移即可直接消费
+  - 但 scene 自身的双 event 关联还不适合一起自动并入
+
+因此这一轮确认：
+
+- 真实 workspace 的首条 `review-reuse` 验收样例，先采用 `approved-ready-merge-inputs`
+- 只消费已确认无歧义的 `timeline-merge-003`
+- 暂不强行把 `timeline-merge-004` 一并 apply
+- 剩余 scene reuse 歧义继续保留在 review note / archived review history 中
+
+原因：
+
+- 当前更需要验证的是“部分 ready merge inputs 能否独立、安全地续跑到 apply”，而不是一次性解决所有 reuse 歧义
+- 如果首条真实样例就要求 scene / event 歧义同时自动收口，容易把执行层验收和策略层判定绑在一起
+- 先确认非歧义部分能稳定落库，后续再决定 scene 双关联歧义是否需要单独的结构化剩余项表达，风险更低
+
+影响：
+
+- `review-reuse` 当前已经不只是“能不能写回”，而是正式确认了一条真实 workspace 中的部分 apply 策略
+- `approved-ready-merge-inputs` 对 reuse path 的语义现在更清楚：它允许只消费已确认的局部输入，而不是要求整条 reuse case 一次性清空
+- 下一步默认优先级不再是“先找一条真实样例”，而是“scene reuse 的剩余歧义应如何继续显式表达”
+
+### 决策：`review-reuse` 的第一版 deterministic writeback 直接沿用 `state/reuse-reviews/<idea-id>.json`
+
+当前状态：
+
+- `review_reuse.py` 已能稳定产出结构化 reuse review 报告
+- 但如果这条 action 还只停在 report-only，pipeline 仍无法把“人工已确认可先消费的非歧义输入”继续推进到 apply
+- 同时，reuse 复核和 constraints 复核虽然关注点不同，但都属于“review-only path 如何确定性续跑”的同一类执行层问题
+
+因此这一轮确认：
+
+- 不新开一层分散 state，而是继续沿用 `state/reuse-reviews/<idea-id>.json`
+- 在同一份 reuse review 产物里新增结构化 `decision`
+- 第一版 decision 先支持两种终态：
+  - `approved-ready-merge-inputs`
+  - `rejected`
+- pipeline `auto` 与 `apply-merge` 直接消费这份 decision
+- decision freshness 同样绑定 `merge_plan_fingerprint`
+
+原因：
+
+- reuse review 当前真正缺的不是“再解释一次哪里歧义”，而是“人工复核后怎样把局部可执行输入继续推进”
+- 如果 reuse review 再单独发明一套全新的状态落点，会把 review-only path 拆散
+- 先沿用与 constraints review 相同的 state 组织方式，后续如果两条 review history 要统一展示，代价更低
+
+影响：
+
+- `review-reuse` 不再只是正式 workflow node，也开始具备可继续续跑的执行层语义
+- 这条 path 现在至少已有两种正式收口：
+  - `approved-ready-merge-inputs`
+  - `rejected`
+- 下一步默认优先级不再是“是否先补 reuse writeback”，而是“先拿真实 workspace case 验证这条新闭环”
+
+## 2026-06-09
+
+### 决策：reuse 歧义的第一版正式入口先落成 `state/reuse-reviews/<idea-id>.json`，暂不直接引入 decision writeback
+
+当前状态：
+
+- merge plan 已能对 reuse 歧义产出 `review_tokens` 与独立 `review` action
+- 但如果这条 action 还只是停在 plan 内部，状态层和 pipeline 实际上很难把它当成稳定节点继续消费
+- 同时，reuse 歧义当前还没有像 `constraints review` 那样已经稳定收敛好的 decision matrix
+
+因此这一轮确认：
+
+- 先新增 `review_reuse.py`
+- 先把 `review-reuse` 报告正式写入 `state/reuse-reviews/<idea-id>.json`
+- 先让 orchestrator / pipeline `auto` 能显式推荐 `review-reuse`
+- 但这一层先停在 `report-only`，不急着同步引入 `resolve_reuse_review.py` 一类 decision writeback
+
+原因：
+
+- 当前更紧迫的问题不是“再补一套 decision token”，而是先把 reuse 歧义从 plan 内部信号推进成工作区里可见、可追踪的正式节点
+- 如果还没确认 reuse 歧义最终该怎样写回，就过早复制一整套 `constraints review` decision 机制，容易先把结构做重
+- 先把 report 和路由落稳，后续再决定是否需要 writeback，改动面更可控
+
+影响：
+
+- `review-reuse` 现在已经是状态层、脚本层、pipeline 层都能显式看到的正式 workflow node
+- 下一步默认不再是“是否要先做 report”，而是“这条 report 要不要继续长成可写回、可续跑的 review 闭环”
+
+## 2026-06-07
+
+### 决策：`review-only` path 的第二种正式 decision 先收敛成 `rejected`，并直接关闭 pending idea
+
+当前状态：
+
+- 第一版 `deterministic review writeback` 已支持 `approved-ready-merge-inputs`
+- 但如果人工复核后的结论不是“继续 apply”，此前系统还缺一条正式、可写回、可关闭 pending path 的决策
+- 当前仓库本身已有 idea-level `status=rejected` 桶，可作为这类收口的天然落点
+
+因此这一轮确认：
+
+- `resolve_constraints_review.py` 新增 `--decision rejected`
+- 这条 decision 不只记录在 `constraint-reviews/<idea-id>.json`，还会同步把对应 idea 标记为 `rejected`
+- 对应 report 会直接收敛成 archive 语义：
+  - `review_state=rejected`
+  - `review_required=false`
+  - `consistency_gate.status=closed`
+
+原因：
+
+- 如果只把“不要 apply”记成一句 review 备注，pending path 仍不会真正关闭
+- 当前更需要的不是第三种抽象 token，而是先补齐最小可用的第二条终态路径
+- 直接复用 idea-level `rejected` 桶，能让状态层、pipeline 与工作区视图自然保持一致
+
+影响：
+
+- `review-only` path 现在至少已有两种正式收口：
+  - `approved-ready-merge-inputs`
+  - `rejected`
+- `deterministic review writeback` 的第一版因此已经具备最小 decision matrix，不再只有“确认后继续 apply”这一条单向路径
+- 下一步默认优先级可继续前移回 `timeline merge`
+
+### 决策：已消费的 constraints review report 采用 archive 语义，不再重算成 live stale review
+
+当前状态：
+
+- `demo-workspace/idea-20260605-003` 跑通真实 apply 后，`constraint-reviews/<idea-id>.json` 仍会回显：
+  - `review_required=true`
+  - `blocked-by-gate`
+  - `consistency_gate=stale`
+- 这些信息来自 apply 后重新计算的 live merge plan，不适合继续拿来当“已消费 review history”的表达
+
+因此这一轮确认：
+
+- 一旦 `decision.applied=true`，`review_constraints()` 不再继续重算 live report
+- apply 后的 report 改写成 archive 语义：
+  - `review_required=false`
+  - `review_state=applied`
+  - `review_status_summary=...`
+  - `ready_merge_inputs=[]`
+  - `blocked_merge_inputs=[]`
+  - `consistency_gate.status=consumed`
+- 同时补一份轻量 `applied_result`，保留：
+  - `resolution_note`
+  - `applied_merge_input_ids`
+  - `updated_files`
+  - `validation_ok`
+  - `validation_report_path`
+
+原因：
+
+- apply 后最重要的信息不再是“如果现在重新规划会发生什么”，而是“这条 review 决策当时怎样被消费，以及消费结果是什么”
+- 如果继续显示 stale live plan，会把已完成 case 错误伪装成待继续处理 case
+- 当前项目更需要的是稳定的 review history，而不是 applied 后的重复规划
+
+影响：
+
+- `demo-workspace/idea-20260605-003` 的 review report 现在已经能稳定显示成已消费归档，而不再像挂起中的 stale review
+- `deterministic review writeback` 的第一版因此不只补齐了“写回并 apply”，也补齐了“apply 后怎样展示”
+- 下一步默认可继续前移到：是否扩第二种正式 review decision 类型
+
+### 决策：review decision 的 freshness 不能绑定 `merge_plan.created_at`，改为绑定 `merge_plan_fingerprint`
+
+当前状态：
+
+- `demo-workspace/idea-20260605-003` 在真实 `review writeback -> apply` 验收里暴露出一个执行层问题
+- 如果 decision 只记录 `merge_plan.created_at`，那么同一条 plan 只要隔几秒重跑一次，
+  已确认的 `approved-ready-merge-inputs` 就会被误判成失效
+- 这不代表计划内容真的变了，只是说明脚本重新生成了 plan 文件
+
+因此这一轮确认：
+
+- `decision` 的 freshness token 改为 `merge_plan_fingerprint`
+- fingerprint 按 plan 的实际执行内容计算，覆盖：
+  - `consistency_gate`
+  - `timeline_merge_inputs`
+  - `proposed_actions`
+- `merge_plan_created_at` 仍保留，但退回成审计信息，不再作为决策有效性的主判断条件
+
+原因：
+
+- 当前需要防的是“计划内容变了还继续沿用旧 decision”，而不是“plan 文件被重新写了一次”
+- 用 `created_at` 会把无意义的重跑和真正的 plan 变化混在一起
+- 用 fingerprint 更符合 `deterministic review writeback` 的目标：同内容稳定、异内容失效
+
+影响：
+
+- 同一条 review-only case 现在可以跨一次或多次 `plan_idea_merge` 重跑后继续稳定 apply
+- `demo-workspace/idea-20260605-003` 的真实闭环因此能够真正收口
+- 下一步默认不再是修“decision 为何平白失效”，而是继续打磨 apply 后的 review history 表达
+
+### 决策：`deterministic review writeback` 先落到 `state/constraint-reviews/<idea-id>.json`，并由 pipeline 直接消费已批准的 ready merge inputs
+
+当前状态：
+
+- `review_constraints.py` 已能稳定产出结构化 review 报告
+- 当前真正缺的不是“再解释一次为什么 review”，而是“人工确认后怎样正式写回，并避免重复打回 `repair-intake`”
+- 对 `mixed-subjects + local-signal` 这类 case，report 里其实已经有可直接消费的 `ready_merge_inputs`
+
+因此这一轮确认：
+
+- 不新开一层分散 state，而是继续沿用 `state/constraint-reviews/<idea-id>.json`
+- 在同一份 review 产物里新增结构化 `decision`
+- 第一版只支持 `decision.status=approved-ready-merge-inputs`
+- 只要这份 decision 仍对齐最新 merge plan，pipeline `auto` 就直接推荐 `apply-merge`
+- `run_outline_workspace_pipeline.py --action apply-merge --execute` 直接消费这份 decision 里批准的 merge inputs 与 resolution note
+
+原因：
+
+- review 报告与 review 决策分开落两份 state，会让人工确认路径重新变散
+- 当前最小但真实的价值，不是一次性设计完整决策矩阵，而是先把“确认后可以继续 apply”的主路径写成稳定闭环
+- 把 `merge_plan_created_at` 写进 decision，可以避免旧决策在 plan 更新后被误复用
+
+影响：
+
+- `review-constraints` 不再只是阶段内终点，而是开始具备可继续续跑的正式执行层语义
+- 状态层与 pipeline 不会再把这类已确认 case 误打回 `repair-intake` 或无限停在 `review-constraints`
+- 下一步默认不是继续扩更多 review policy，而是先拿真实 workspace 跑这条新闭环
+
+## 2026-06-06
+
+### 决策：`P0` 正式收口，`deterministic review writeback` 下放为 `P1` 首要任务
+
+当前状态：
+
+- `docs/p0-closure-checklist.md` 已补齐
+- `docs/p0-known-limitations.md` 已建立
+- `first-workflow-case/` 已完成完整闭环
+- `demo-workspace/` 已覆盖：
+  - multi-input apply
+  - relationship lifecycle
+  - knowledge-state lifecycle
+  - world-rule first exception / continuity / split-subject direct closure
+  - mixed-subject review-only closure
+- `python3 -m unittest discover -s tests -v` 当前 `145` 个测试，`OK`
+
+因此这一轮确认：
+
+- `P0` 不再继续视为“接近收口”，而是正式宣布收口
+- `review-constraints` 当前以“结构化报告 + 人工决策”形态视为阶段内够用
+- `deterministic review writeback` 不再算 `P0` blocker，而是 `P1` 的首要任务
+
+原因：
+
+- 当前剩余空白已不再阻断主链路
+- 已知限制现在都已有显式 pending path 或正式清单
+- 如果继续把 `review writeback` 绑在 `P0` 上，会把阶段收口标准抬到超过当前目标的程度
+
+影响：
+
+- 当前阶段从 `P0 主链路收口与工作区级验收期` 切到 `P1 执行层厚化与 review writeback 期`
+- 下一步默认不再做 `P0` 证明，而是直接实现 `review-only` path 的正式写回入口
+
+## 2026-06-05
+
+### 决策：`P0` 已知限制需要单独落清单，不再散落在验收记录里
+
+当前状态：
+
+- `review-only` path、弱 location 推断、`character` beat 先落 scene 等边界，已经在多轮验收里反复出现
+- 但这些内容此前主要散落在 `PROJECT_STATUS.md` 和 `docs/p0-closure-checklist.md` 的长段落里
+
+因此这一轮确认：
+
+- 新增 `docs/p0-known-limitations.md`
+- 把当前阶段正式接受的限制集中列成可审计清单
+- `docs/p0-closure-checklist.md` 中“已知限制可列出”现在视为完成项
+
+原因：
+
+- 如果这些边界不单独落清单，`P0` 是否真的可以收口就会一直停留在口头判断
+- 当前更需要的不是再补一条局部规则，而是让阶段边界可审计、可复核
+
+影响：
+
+- 顶层默认下一步可继续前移到：判断 `P0` 是否正式收口
+- 如果后面某条“已知限制”开始阻断真实 workspace，它就应从清单移除并重新回到主优先级
+
+### 决策：`review-constraints` 现在要写成正式结构化产物，而不是只停在 orchestrator 推荐语
+
+当前状态：
+
+- `mixed-subjects + local-signal` 已经有稳定的 review-only policy
+- 但此前 `review-constraints` 主要体现在：
+  - `workspace-status.json` 的推荐语
+  - orchestrator 的 `recommended_action`
+  - merge plan 里的 constraints action
+
+因此这一轮确认：
+
+- 新增 `scripts/review_constraints.py`
+- `review-constraints` 执行后现在会正式写出 `state/constraint-reviews/<idea-id>.json`
+- 这份报告默认会包含 `review_policy / review_policy_summary / review_checklist / ready_merge_inputs / action_matrix`
+
+原因：
+
+- 只靠一句推荐语，不足以支撑后续 `P0` 阶段对 review-only path 的收口判断
+- 当前更需要的是把“这条 idea 为什么停在 review、复核后还能继续做什么”写成可追踪产物
+- 这样后面做阶段审计时，才能稳定区分“这是已知限制”还是“这是还没做完的脚本缺口”
+
+影响：
+
+- `review-constraints` 从推荐动作升级成了正式工作流节点
+- 下一步顶层默认可从 `Track 10` 继续前移到 `P0` 收口审计
+
+### 决策：`Track 10` 当前按“split-subjects direct / mixed-subjects review-only”收口，下一步默认转向 `review-constraints` 工作流
+
+当前状态：
+
+- `demo-workspace/idea-20260605-002` 已把 `split-subjects + claim-match + narrative targets` 跑成真实 direct closure
+- `demo-workspace/idea-20260605-003` 已把 `mixed-subjects + local-signal` 跑成真实 review-only closure
+- planner、`workspace-status.json` 与 pipeline `auto` 现在已经能稳定输出：
+  - `recommended_action=review-constraints`
+  - `review_policy=mixed-subjects-local-signal-review-only`
+
+因此这一轮确认：
+
+- `World-Rule Exception Lifecycle` 到当前 `P0` 阶段已经具备一套可执行的主处理矩阵
+- `mixed-subjects + local-signal` 当前不再视为“待决定”状态，而是正式视为 review-only policy
+- 顶层默认不再继续围绕 `Track 10` 横向补更多 `world-rule` 微变体，而是转去把 `review-constraints` 作为正式工作流终点继续做厚
+
+原因：
+
+- 用户当前真正需要的，不再是“这条 mixed-subject 样例还能不能再拆一版 direct policy”，而是“系统是否已经能稳定解释哪些 case 应直通、哪些 case 应停在 review”
+- 一旦 `split-subjects` 与 `mixed-subjects` 都有真实 workspace 策略，继续补细变体的边际收益会明显下降
+- 这时更值钱的是把 review-only path 的表达、状态与收口标准写清楚，方便后续做阶段收口判断
+
+影响：
+
+- `Track 10` 当前可按阶段够用处理，不再是顶层默认下一缺口
+- 下一步默认工作重心转向 `review-constraints` 的策略矩阵与 `P0` 收口审计
+
+### 决策：`mixed-subjects` 当前先保留 review-only，但 timeline 参与者可从 `participant_candidates` 回填
+
+当前状态：
+
+- `demo-workspace/idea-20260605-003` 已把 `prior-exception-mixed-subjects-local-signal` 拉进真实 workspace
+- 这条样例如果保持 `character_mentions=[]`，才能稳定维持 `mixed-subjects + local-signal`
+- 但此前 `timeline merge` 只从 `character_mentions` 推 `participant_ids`，导致这条样例会先掉进 `repair-intake`
+
+因此这一轮确认：
+
+- `timeline merge` 现在允许从 `timeline_candidates[].participant_candidates` 回填 `participant_ids`
+- 这样 `mixed-subjects` 样例可以在不破坏 local-signal 形态的前提下，直接进入 `review-constraints`
+- 但 `mixed-subjects` 本身当前仍先保留为 review-only，不默认 direct apply
+
+原因：
+
+- 这次真正需要暴露给顶层的 blocker 是 `world-rule / exception` 主体范围，而不是次级的 intake 缺参
+- 如果不补这条 participant 回填，mixed-subject 样例会被 `repair-intake` 抢优先级，真实缺口就又被遮住
+- 但 mixed-subject 本身比 split-subject 更复杂，当前还不该直接套用同样的局部直通策略
+
+影响：
+
+- `demo-workspace/idea-20260605-003` 现在会稳定收敛到 `review-constraints`
+- Track 10 当前剩余问题被进一步收束成“mixed-subjects 要不要继续保持 review-only”
+- `participant_candidates` 从提示信息升级成了 timeline merge 的正式参与者回填来源之一
+
+### 决策：`prior-exception + split-subjects + claim-match + narrative targets` 可以 direct apply，但只直通“额外主体”的 knowledge-state
+
+当前状态：
+
+- `demo-workspace/idea-20260605-002` 已先被显式收敛成 `review-constraints`
+- 但这条真实样例的结构已经足够明确：
+  - 规则主体是 `林舟`
+  - 既有 exception 是 `rulex-rule-001-林舟-黑潮真正目标-ch10`
+  - 同章新增的第二主体是 `师姐`
+  - idea 自身也带有明确的 event / scene 落点
+
+因此这一轮确认：
+
+- 对 `prior-exception + split-subjects + claim-match + narrative targets`，planner 可以不再停留在纯 review
+- 默认策略改为：
+  - 保留规则主体既有 exception
+  - 不回写规则主体旧的 `knowledge-state`
+  - 只为额外主体生成新的 chapter-scoped `knowledge-state`
+  - 继续允许 event / scene 一次性 direct apply
+
+原因：
+
+- 这类 case 的真正不确定点，不在“例外链是否还存在”，而在“额外主体的知情变化要不要独立落库”
+- 当 narrative targets 已经明确时，这条路径可以稳定表达成“同一场景里保留旧 exception + 追加新主体 knowledge-state”
+- 这样既不会误扩既有 exception 的主体范围，也不会把整条 idea 永久卡在 review bucket
+
+影响：
+
+- `demo-workspace/idea-20260605-002` 不再只是 pending review 样例，而是已经完成真实 direct closure
+- `Track 10` 当前剩余的主要缺口继续收缩到 `mixed-subjects`
+- `review-constraints` 仍然保留，但不再是这类 split-subject narrative case 的默认终点
+
+## 2026-06-04
+
+### 决策：`World-Rule Exception Lifecycle` 先视为“已完成 first exception / prior-exception continuity”，顶层默认把下一缺口收缩到 `mixed-subject / split-scope`
+
+当前状态：
+
+- `demo-workspace/` 已补齐 world-rule 的两类真实样例：
+  - `idea-20260604-005`：first exception
+  - `idea-20260604-006`：prior-exception continuity
+- 第一条例外记录现在已经能在真实 workspace 中稳定写入 `timeline / outline + canon knowledge-state + world_rule_exception`
+- 同一主体在更晚章节再次触发同一 rule 时，planner 也已经能稳定沿用既有 exception，并把后续 beat 收敛成 `scene-only`
+
+因此这一轮确认：
+
+- `World-Rule Exception Lifecycle` 不再算“还没开始”
+- 顶层默认不再优先回去重证 same-subject first exception 或 prior-exception continuity
+- 这条 track 的下一默认缺口改为：已有 exception chain 后的 `mixed-subject / split-scope`
+
+原因：
+
+- first exception 与 prior continuity 都已经有真实 workspace 闭环，不再只是测试或 explainer 层能力
+- 如果继续在 same-subject 情况下横向补更多近似样例，顶层推进会再次滑回细节驱动
+- 当前更有价值的是确认“例外链条能否在主体范围变复杂时仍保持稳定”
+
+影响：
+
+- `docs/workspace-acceptance-framework.md` 会把 `Track 10` 从“未完成”更新成“进行中，并已完成前两段”
+- `NEXT_ACTIONS.md` 的默认切入点将从“先把 track 搭起来”前移到“收掉 mixed-subject / split-scope”
+- 顶层判断会继续按 acceptance track 的剩余空白推进，而不是回头重复证明已经收口的 same-subject world-rule case
+
+### 决策：已有 exception chain 的 `split-subjects` case，默认先显式进入 `review-constraints`，不再伪装成普通 `plan-merge`
+
+当前状态：
+
+- `demo-workspace/idea-20260605-002` 已经把 `prior-exception-split-subjects-claim-match` 拉进了真实 workspace
+- 这类 case 的 consistency 本身可以是 clean，但 constraints explainer 仍明确是 `needs-review`
+- 如果状态层继续只返回 `plan-merge`，真实 pending path 会被埋掉
+
+因此这一轮确认：
+
+- 对“consistency clean，但 constraints 仍需 review”的 pending idea，状态层默认显式标记成 `review-constraints`
+- orchestrator 也默认优先推荐 `review-constraints`
+- 这类 case 在当前阶段先不默认 direct apply
+
+原因：
+
+- 这比继续把所有 clean-gate case 混成 `plan-merge` 更符合真实工作流
+- 当前真正需要人判断的，不是“能不能生成 plan”，而是“既有 exception 是否允许覆盖到多主体场景”
+- 把 review path 显式化，后续才方便继续定义真正的最终处理策略
+
+影响：
+
+- `workspace-status.json` 的 `recommended_next_step` 现在会直接提示“先复核 world-rule / exception 主体范围”
+- `run_outline_workspace_pipeline.py` 现在新增 `review-constraints` 动作
+- `demo-workspace/idea-20260605-002` 成为 Track 10 当前最真实的 pending 样例，而不是继续被 generic `plan-merge` 掩盖
+
+### 决策：same-subject prior exception 的后续 recap 默认保留既有 exception / knowledge 节点，只新增 scene beat
+
+当前状态：
+
+- `idea-20260604-005` 已在第 10 章把 `林舟提前知道黑潮真正目标` 落成正式 exception 节点
+- `idea-20260604-006` 则是在第 11 章同主体再次确认同一事实
+- 这类 case 既带有 prior-exception continuity，又带有 same-subject knowledge repeat beat
+
+因此这一轮确认：
+
+- 对 same-subject prior-exception recap，planner 默认沿用既有 `world_rule_exception`
+- 同时保留既有 `knowledge-state` 首次节点
+- 后续章节默认只落 `scene-only` narrative beat，而不改写 exception 或 knowledge 的首次发生章节
+
+原因：
+
+- 这类后续确认更像“例外链条之后的叙事再确认”，不是新的例外首次发生点
+- 如果直接回写旧 exception / knowledge 节点，会抹掉第 10 章作为 first exception 的历史含义
+- 把它收敛成 `scene-only`，与 relationship / knowledge repeat beat 的处理方式也更一致
+
+影响：
+
+- `demo-workspace/state/canon-index.json` 会继续保留 `know-char-protagonist-黑潮真正目标-ch10` 与 `rulex-rule-001-林舟-黑潮真正目标-ch10`
+- `idea-20260604-006` apply 后只新增第 11 章 event / scene，不会制造新的 exception 节点
+- rerun consistency 后会显式保留 `world-rule-exemption-applied`，但不再残留 `world-rule-conflict` 或 `knowledge-state-conflict`
+
+### 决策：knowledge-state line 到当前阶段先视为“够用”，顶层默认转向 `World-Rule Exception Lifecycle`
+
+当前状态：
+
+- `demo-workspace/` 已补齐 knowledge-state 的三类真实 workspace 样例：
+  - `idea-20260604-003`：first node
+  - `idea-20260604-001`：same-subject later recap
+  - `idea-20260604-004`：second-subject later learns
+- 如果继续默认沿 knowledge-state 横向扩更多 wording / participant 细边界，顶层推进会重复 relationship 线已经经历过的问题
+- 当前更缺的不是再多一个 knowledge-state 变体，而是下一条未完成的大 acceptance track
+
+因此这一轮开始：
+
+- knowledge-state line 在 `P0` 当前阶段先视为“框架够用”
+- 顶层默认不再优先补新的 knowledge-state 微样例
+- 下一条默认 acceptance track 改为：`World-Rule Exception Lifecycle`
+
+原因：
+
+- knowledge-state 已经有了真实的 first node / repeat beat / second subject later learns 三种闭环形态
+- 继续停留在这一条线上，边际收益已经开始下降
+- 现在更有价值的是把 world-rule 也推进成同等级的真实 workspace 验收轨道
+
+影响：
+
+- `docs/workspace-acceptance-framework.md` 会把 `Track 9` 标成已完成
+- `NEXT_ACTIONS.md` 的默认切入点将从 knowledge-state 转到 world-rule
+- 顶层判断会继续按 acceptance tracks 的平衡推进，而不是反复在单一 domain 上横向扩张
+
+### 决策：later knowledge recap 默认保留旧 knowledge-state，只新增 scene；新主体 later learns 追加新的 chapter-scoped knowledge-state
+
+当前状态：
+
+- `idea-20260604-001` 暴露出一个 knowledge repeat beat：第 4 章已有正式 `knowledge-state`，第 6 章又出现“再次确认”
+- `idea-20260604-004` 则暴露出另一类 case：同一 fact 上，另一主体在更晚章节才正式知情
+
+因此这一轮确认：
+
+- 对 same-subject later recap，planner 默认不再改写既有 `knowledge-state` 章节，而是优先产出 `scene-only` gate-resolving input
+- 对 second-subject later learns，planner 默认继续追加新的 chapter-scoped `knowledge-state` 节点
+
+原因：
+
+- later recap 更像 narrative beat，而不是“首次知情章节被改写”
+- 新主体 later learns 本身就是新的正式 canon 事实，不应覆写旧主体的节点
+- 这两类边界一起定下来后，knowledge-state 才真正具备 lifecycle 含义，而不只是单点写入能力
+
+影响：
+
+- `demo-workspace/state/canon-index.json` 现在已同时保留：
+  - `know-char-protagonist-议会内部泄密-ch4`
+  - `know-char-protagonist-议长遇刺另有内情-ch8`
+  - `know-char-shijie-议长遇刺另有内情-ch9`
+- `idea-20260604-001` apply 后不会再误覆写第 4 章知情节点
+- `idea-20260604-004` apply 后会稳定追加新的 subject-scoped 节点，而不是改写 `林舟` 的第 8 章记录
+
 ## 2026-06-03
+
+### 决策：relationship acceptance line 到当前阶段先视为“够用”，顶层默认转向下一条 acceptance track
+
+当前状态：
+
+- relationship 这条线已经连续跑通了 `first node / same-state repeat beat / transition / reconciliation / post-reconciliation repeat beat`
+- 如果继续默认沿这条线横向加样例，顶层推进又会重新陷进“局部还可以再补一点”的模式
+- 用户当前更需要的是阶段框架，而不是让单一 domain 无限扩张
+
+因此这一轮开始：
+
+- relationship line 在 `P0` 当前阶段先视为“框架够用”
+- 顶层默认不再优先补新的 relationship 微样例
+- 下一条默认 acceptance track 改为：`Knowledge-State Lifecycle`
+
+原因：
+
+- relationship 线已经足够证明这套 `consistency -> plan -> apply -> validate` 对 history chain 是可用的
+- 继续沿这条线深挖，边际收益开始下降
+- 把下一条大线搭起来，比继续扩 relationship 细分样例更符合当前阶段目标
+
+影响：
+
+- `docs/workspace-acceptance-framework.md` 会把 `Track 8` 标成已完成
+- `NEXT_ACTIONS.md` 的默认切入点将从 relationship 转到 knowledge-state
+- 之后顶层判断将更强调 acceptance tracks 的平衡，而不是单条 domain 的局部完整性
 
 ### 决策：P0 顶层推进改为“acceptance tracks framework”，而不是继续按零散样例推进
 

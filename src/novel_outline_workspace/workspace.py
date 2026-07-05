@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import hashlib
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -203,8 +204,28 @@ def _merge_plan_view_path(workspace: Path, idea_id: str) -> Path:
     return workspace / "views/merge-plans" / f"{idea_id}.html"
 
 
+def _constraints_review_path(workspace: Path, idea_id: str) -> Path:
+    return workspace / "state/constraint-reviews" / f"{idea_id}.json"
+
+
+def _reuse_review_path(workspace: Path, idea_id: str) -> Path:
+    return workspace / "state/reuse-reviews" / f"{idea_id}.json"
+
+
 def _sortable_timestamp(value: Any) -> str:
     return str(value or "").strip()
+
+
+def compute_review_plan_fingerprint(plan: dict[str, Any]) -> str:
+    payload = {
+        "idea_id": str(plan.get("idea_id") or "").strip(),
+        "status": str(plan.get("status") or "").strip(),
+        "consistency_gate": plan.get("consistency_gate", {}),
+        "timeline_merge_inputs": plan.get("timeline_merge_inputs", []),
+        "proposed_actions": plan.get("proposed_actions", []),
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _merge_plan_missing_fields(plan: dict[str, Any]) -> list[str]:
@@ -244,6 +265,13 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
             "report_status": "missing",
             "has_conflicts": False,
             "needs_intake_repair": False,
+            "needs_constraints_review": False,
+            "needs_reuse_review": False,
+            "constraints_review_summary": "",
+            "constraints_review_policy": "",
+            "constraints_review_policy_summary": "",
+            "reuse_review_summary": "",
+            "reuse_review_tokens": [],
             "warning_codes": [],
             "open_questions": [],
             "missing_fields": [],
@@ -256,6 +284,13 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
             "report_status": "stale",
             "has_conflicts": False,
             "needs_intake_repair": False,
+            "needs_constraints_review": False,
+            "needs_reuse_review": False,
+            "constraints_review_summary": "",
+            "constraints_review_policy": "",
+            "constraints_review_policy_summary": "",
+            "reuse_review_summary": "",
+            "reuse_review_tokens": [],
             "warning_codes": [],
             "open_questions": [],
             "missing_fields": [],
@@ -284,6 +319,13 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
             "plan_status": "missing",
             "has_conflicts": has_conflicts,
             "needs_intake_repair": bool(open_questions or set(warning_codes) & INTAKE_REPAIR_WARNING_CODES),
+            "needs_constraints_review": False,
+            "needs_reuse_review": False,
+            "constraints_review_summary": "",
+            "constraints_review_policy": "",
+            "constraints_review_policy_summary": "",
+            "reuse_review_summary": "",
+            "reuse_review_tokens": [],
             "warning_codes": warning_codes,
             "open_questions": open_questions,
             "missing_fields": [],
@@ -297,24 +339,124 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
             "plan_status": "stale",
             "has_conflicts": has_conflicts,
             "needs_intake_repair": bool(open_questions or set(warning_codes) & INTAKE_REPAIR_WARNING_CODES),
+            "needs_constraints_review": False,
+            "needs_reuse_review": False,
+            "constraints_review_summary": "",
+            "constraints_review_policy": "",
+            "constraints_review_policy_summary": "",
+            "reuse_review_summary": "",
+            "reuse_review_tokens": [],
             "warning_codes": warning_codes,
             "open_questions": open_questions,
             "missing_fields": [],
         }
 
+    review_report = read_json(_constraints_review_path(workspace, idea_id), {})
+    review_decision = review_report.get("decision", {}) if isinstance(review_report, dict) else {}
+    approved_merge_input_ids = [
+        str(item).strip()
+        for item in review_decision.get("selected_merge_input_ids", [])
+        if str(item).strip()
+    ]
+    review_decision_apply_ready = (
+        str(review_decision.get("status") or "").strip() == "approved-ready-merge-inputs"
+        and bool(str(review_decision.get("resolution_note") or "").strip())
+        and approved_merge_input_ids
+        and str(review_decision.get("merge_plan_fingerprint") or "").strip() == compute_review_plan_fingerprint(plan)
+    )
+    if review_decision_apply_ready:
+        ready_merge_input_ids = {
+            str(item.get("id") or "").strip()
+            for item in plan.get("timeline_merge_inputs", [])
+            if bool(item.get("can_apply_directly"))
+            and not item.get("missing_fields")
+            and str(item.get("id") or "").strip()
+        }
+        review_decision_apply_ready = set(approved_merge_input_ids).issubset(ready_merge_input_ids)
+
+    reuse_review_report = read_json(_reuse_review_path(workspace, idea_id), {})
+    reuse_review_decision = reuse_review_report.get("decision", {}) if isinstance(reuse_review_report, dict) else {}
+    approved_reuse_merge_input_ids = [
+        str(item).strip()
+        for item in reuse_review_decision.get("selected_merge_input_ids", [])
+        if str(item).strip()
+    ]
+    reuse_review_apply_ready = (
+        str(reuse_review_decision.get("status") or "").strip() == "approved-ready-merge-inputs"
+        and bool(str(reuse_review_decision.get("resolution_note") or "").strip())
+        and approved_reuse_merge_input_ids
+        and str(reuse_review_decision.get("merge_plan_fingerprint") or "").strip() == compute_review_plan_fingerprint(plan)
+    )
+    if reuse_review_apply_ready:
+        ready_merge_input_ids = {
+            str(item.get("id") or "").strip()
+            for item in plan.get("timeline_merge_inputs", [])
+            if not item.get("missing_fields")
+            and str(item.get("id") or "").strip()
+            and not any(str(token).strip().startswith("reuse-ambiguity-") for token in item.get("review_tokens", []))
+        }
+        reuse_review_apply_ready = set(approved_reuse_merge_input_ids).issubset(ready_merge_input_ids)
+
     missing_fields = _merge_plan_missing_fields(plan)
+    constraints_review_summary = ""
+    constraints_review_policy = ""
+    constraints_review_policy_summary = ""
+    needs_constraints_review = False
+    reuse_review_summary = ""
+    reuse_review_tokens: list[str] = []
+    needs_reuse_review = False
+    for action in plan.get("proposed_actions", []):
+        if str(action.get("domain") or "").strip() != "constraints":
+            continue
+        if str(action.get("readiness") or "").strip() != "needs-review":
+            continue
+        needs_constraints_review = True
+        constraints_review_summary = str(action.get("summary") or "").strip()
+        constraints_review_policy = str(action.get("review_policy") or "").strip()
+        constraints_review_policy_summary = str(action.get("review_policy_summary") or "").strip()
+        break
+    for action in plan.get("proposed_actions", []):
+        if str(action.get("domain") or "").strip() != "review":
+            continue
+        if str(action.get("readiness") or "").strip() != "needs-review":
+            continue
+        needs_reuse_review = True
+        reuse_review_summary = str(action.get("summary") or "").strip()
+        reuse_review_tokens = [
+            str(token).strip()
+            for token in action.get("review_tokens", [])
+            if str(token).strip()
+        ]
+        break
 
     return {
         "idea_id": idea_id,
         "report_status": "fresh",
         "plan_status": "fresh",
         "has_conflicts": has_conflicts,
-        "needs_intake_repair": bool(
+        "needs_intake_repair": False if review_decision_apply_ready or reuse_review_apply_ready or needs_constraints_review or needs_reuse_review else bool(
             missing_fields or open_questions or set(warning_codes) & INTAKE_REPAIR_WARNING_CODES
         ),
+        "needs_constraints_review": False if review_decision_apply_ready or reuse_review_apply_ready else needs_constraints_review,
+        "needs_reuse_review": False if review_decision_apply_ready or reuse_review_apply_ready else needs_reuse_review,
+        "constraints_review_summary": constraints_review_summary,
+        "constraints_review_policy": constraints_review_policy,
+        "constraints_review_policy_summary": constraints_review_policy_summary,
+        "reuse_review_summary": reuse_review_summary,
+        "reuse_review_tokens": reuse_review_tokens,
+        "constraints_review_decision_status": str(review_decision.get("status") or "").strip(),
+        "constraints_review_decision_summary": str(review_decision.get("summary") or "").strip(),
+        "constraints_review_resolution_note": str(review_decision.get("resolution_note") or "").strip(),
+        "approved_merge_input_ids": approved_merge_input_ids,
+        "constraints_review_apply_ready": review_decision_apply_ready,
+        "reuse_review_decision_status": str(reuse_review_decision.get("status") or "").strip(),
+        "reuse_review_decision_summary": str(reuse_review_decision.get("summary") or "").strip(),
+        "reuse_review_resolution_note": str(reuse_review_decision.get("resolution_note") or "").strip(),
+        "approved_reuse_merge_input_ids": approved_reuse_merge_input_ids,
+        "reuse_review_apply_ready": reuse_review_apply_ready,
         "warning_codes": warning_codes,
         "open_questions": open_questions,
-        "missing_fields": missing_fields,
+        "missing_fields": [] if review_decision_apply_ready or reuse_review_apply_ready else missing_fields,
     }
 
 
@@ -326,16 +468,39 @@ def describe_pending_idea_next_step(workspace: Path, idea: dict[str, Any]) -> st
         return f"先为 `{title}` 运行 consistency check，再决定如何 merge。"
     if progress["report_status"] == "stale":
         return f"先重跑 `{title}` 的 consistency check，再继续 merge。"
-    if progress["has_conflicts"]:
-        return f"先处理 `{title}` 的 consistency 冲突，再决定如何 merge。"
     if progress.get("plan_status") in {"missing", "stale"}:
         return f"先为 `{title}` 重跑 merge plan，确认最新写入路径。"
+    if progress.get("constraints_review_apply_ready"):
+        decision_summary = str(progress.get("constraints_review_decision_summary") or "").strip()
+        if decision_summary:
+            return f"基于 `{title}` 已确认的 constraints review 结论，直接 apply 已批准的 merge inputs。{decision_summary}"
+        return f"基于 `{title}` 已确认的 constraints review 结论，直接 apply 已批准的 merge inputs。"
+    if progress.get("reuse_review_apply_ready"):
+        decision_summary = str(progress.get("reuse_review_decision_summary") or "").strip()
+        if decision_summary:
+            return f"基于 `{title}` 已确认的 reuse review 结论，直接 apply 已批准的 merge inputs。{decision_summary}"
+        return f"基于 `{title}` 已确认的 reuse review 结论，直接 apply 已批准的 merge inputs。"
     if progress["needs_intake_repair"]:
         if progress["missing_fields"]:
             return f"先补 `{title}` 的 { _format_missing_field_labels(progress['missing_fields']) }，再继续 apply merge。"
         if progress["open_questions"]:
             return f"先回答 `{title}` 的 intake 待确认问题，再继续 merge。"
         return f"先补 `{title}` 的 intake 信息，再继续 merge。"
+    if progress.get("needs_constraints_review"):
+        summary = str(progress.get("constraints_review_summary") or "").strip()
+        policy_summary = str(progress.get("constraints_review_policy_summary") or "").strip()
+        if summary:
+            if policy_summary:
+                return f"先复核 `{title}` 的 world-rule / exception 主体范围。{policy_summary}{summary}"
+            return f"先复核 `{title}` 的 world-rule / exception 主体范围。{summary}"
+        return f"先复核 `{title}` 的 world-rule / exception 主体范围，再决定如何 merge。"
+    if progress.get("needs_reuse_review"):
+        summary = str(progress.get("reuse_review_summary") or "").strip()
+        if summary:
+            return f"先复核 `{title}` 的 event / scene reuse 歧义。{summary}"
+        return f"先复核 `{title}` 的 event / scene reuse 歧义，再决定如何 merge。"
+    if progress["has_conflicts"]:
+        return f"优先处理 `{title}` 的 merge plan，用结构化 merge inputs 消解当前 consistency 冲突。"
     return f"优先处理 `{title}`，并把确认内容并入 canon / outline / timeline。"
 
 
@@ -1451,7 +1616,25 @@ def infer_chapter_hints(title: str, content: str) -> list[int]:
 
 def infer_location_candidates(title: str, content: str) -> list[str]:
     text = f"{title} {content}"
-    suffixes = ("港口", "议事厅", "白塔", "皇城", "主城", "学宫", "宫", "府", "城", "镇", "村", "山", "海", "岛", "厅", "院")
+    suffixes = (
+        "档案室",
+        "港口",
+        "议事厅",
+        "白塔",
+        "皇城",
+        "主城",
+        "学宫",
+        "宫",
+        "府",
+        "城",
+        "镇",
+        "村",
+        "山",
+        "海",
+        "岛",
+        "厅",
+        "院",
+    )
     suffix_group = "|".join(sorted((re.escape(suffix) for suffix in suffixes), key=len, reverse=True))
     location_core = rf"[\u4e00-\u9fff]{{0,6}}(?:{suffix_group})"
     patterns = (
@@ -1469,7 +1652,15 @@ def infer_location_candidates(title: str, content: str) -> list[str]:
             if any(fragment in chunk for fragment in NOISY_TAG_FRAGMENTS + ("意识到", "第一次", "知道", "确认")):
                 continue
             candidates.append(chunk)
-    return _dedupe_keep_order(candidates[:5])
+
+    deduped = _dedupe_keep_order(candidates)
+    compressed: list[str] = []
+    for candidate in deduped:
+        if any(candidate != existing and candidate in existing for existing in compressed):
+            continue
+        compressed = [existing for existing in compressed if existing not in candidate]
+        compressed.append(candidate)
+    return compressed[:5]
 
 
 def infer_character_mentions(title: str, content: str, protagonist_name: str | None = None) -> list[str]:
