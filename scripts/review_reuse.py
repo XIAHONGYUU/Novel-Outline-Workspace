@@ -29,6 +29,21 @@ def main() -> int:
             print(f"Tokens: {', '.join(report['review_tokens'])}")
         if report.get("review_summary"):
             print(f"Summary: {report['review_summary']}")
+        ready_inputs = report.get("ready_merge_inputs", [])
+        if ready_inputs:
+            print("Ready merge inputs:")
+            for item in ready_inputs:
+                merge_input_id = str(item.get("id") or "").strip()
+                summary = str(item.get("summary") or "").strip()
+                print(f"- {merge_input_id}: {summary}")
+        remaining_inputs = report.get("remaining_review_merge_inputs", [])
+        if remaining_inputs:
+            print("Remaining review inputs:")
+            for item in remaining_inputs:
+                merge_input_id = str(item.get("id") or "").strip()
+                remaining_kind = str(item.get("remaining_kind") or "").strip() or "pending"
+                remaining_summary = str(item.get("remaining_summary") or item.get("summary") or "").strip()
+                print(f"- {merge_input_id} [{remaining_kind}]: {remaining_summary}")
         print(f"Report: {report['report_path']}")
     return 0
 

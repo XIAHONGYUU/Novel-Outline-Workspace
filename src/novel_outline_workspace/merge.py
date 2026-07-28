@@ -2305,6 +2305,18 @@ def _matching_existing_event_id_for_draft(
     return None
 
 
+def _append_unique_value(items: list[Any], value: Any) -> None:
+    if value and value not in items:
+        items.append(value)
+
+
+def _prefer_titled_matches(
+    titled: list[Any],
+    fallback: list[Any],
+) -> list[Any]:
+    return titled or fallback
+
+
 def _compatible_scene_event_ids_for_draft(
     scene_event_ids: list[str],
     event_map: dict[str, dict[str, Any]],
@@ -2313,20 +2325,24 @@ def _compatible_scene_event_ids_for_draft(
     draft_location: str | None,
 ) -> tuple[list[str], bool]:
     normalized_label = _normalize_text(event_label)
-    output: list[str] = []
+    titled_output: list[str] = []
+    fallback_output: list[str] = []
     for event_id in scene_event_ids:
         event = event_map.get(str(event_id))
         if not event:
             continue
         existing_label = _normalize_text(event.get("label") or event.get("id"))
-        if normalized_label and not _title_keys_match(normalized_label, existing_label):
-            continue
         existing_location = str(event.get("location") or "").strip()
         if draft_location and existing_location and not _location_keys_match(draft_location, existing_location):
             continue
         resolved_event_id = str(event.get("id") or "").strip()
-        if resolved_event_id and resolved_event_id not in output:
-            output.append(resolved_event_id)
+        if not resolved_event_id:
+            continue
+        if normalized_label and _title_keys_match(normalized_label, existing_label):
+            _append_unique_value(titled_output, resolved_event_id)
+        else:
+            _append_unique_value(fallback_output, resolved_event_id)
+    output = _prefer_titled_matches(titled_output, fallback_output)
     return output, len(output) > 1
 
 
@@ -2338,14 +2354,12 @@ def _linked_scene_character_ids_for_event(
     draft_location: str | None,
 ) -> tuple[list[str], bool]:
     normalized_label = _normalize_text(event_label)
-    matches: list[tuple[str, ...]] = []
+    titled_matches: list[tuple[str, ...]] = []
+    fallback_matches: list[tuple[str, ...]] = []
     for record in scene_records:
         scene = record.get("scene", {})
         linked_event_ids = [str(item).strip() for item in scene.get("event_ids", []) if str(item).strip()]
         if event_id not in linked_event_ids:
-            continue
-        scene_title = _normalize_text(scene.get("title") or scene.get("id"))
-        if normalized_label and not _title_keys_match(normalized_label, scene_title):
             continue
         if draft_location:
             scene_locations = _record_location_candidates({"record_type": "scene", "scene": scene})
@@ -2357,7 +2371,12 @@ def _linked_scene_character_ids_for_event(
             if str(item).strip()
         )
         if character_ids:
-            matches.append(character_ids)
+            scene_title = _normalize_text(scene.get("title") or scene.get("id"))
+            if normalized_label and _title_keys_match(normalized_label, scene_title):
+                titled_matches.append(character_ids)
+            else:
+                fallback_matches.append(character_ids)
+    matches = _prefer_titled_matches(titled_matches, fallback_matches)
     deduped = list(dict.fromkeys(matches))
     if len(deduped) == 1:
         return list(deduped[0]), False
@@ -2579,6 +2598,86 @@ def _default_timeline_apply_args(
     return apply_args, deduped_targets, sorted(set(missing_fields))
 
 
+def _first_non_empty_text(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _first_non_empty_id_list(*candidates: Any) -> list[str]:
+    for candidate in candidates:
+        if not isinstance(candidate, list):
+            continue
+        resolved = [str(item).strip() for item in candidate if str(item).strip()]
+        if resolved:
+            return resolved
+    return []
+
+
+def _resolve_event_reuse_participants(
+    *,
+    preferred_participant_ids: Any,
+    linked_scene_character_ids: list[str],
+    linked_scene_character_ids_ambiguous: bool,
+    existing_participant_ids: list[Any],
+    record_id: str,
+) -> tuple[list[str], list[str], list[str]]:
+    participant_ids = _first_non_empty_id_list(
+        preferred_participant_ids,
+        linked_scene_character_ids,
+    )
+    if participant_ids:
+        return participant_ids, [], []
+    if linked_scene_character_ids_ambiguous:
+        return (
+            [],
+            [f"事件 `{record_id}` 命中了多条角色集合冲突的 linked scenes，参与者需要人工确认。"],
+            ["reuse-ambiguity-linked-scenes"],
+        )
+    return _first_non_empty_id_list(existing_participant_ids), [], []
+
+
+def _resolve_scene_pov_from_candidates(
+    *,
+    preferred_pov: str | None,
+    linked_participant_ids: list[str],
+    existing_pov: str | None,
+    fallback_character_ids: list[str],
+    id_to_name: dict[str, str],
+) -> str | None:
+    scene_pov = _first_non_empty_text(
+        preferred_pov,
+        id_to_name.get(linked_participant_ids[0]) if linked_participant_ids else None,
+        existing_pov,
+    ) or None
+    if scene_pov or not fallback_character_ids:
+        return scene_pov
+    return id_to_name.get(fallback_character_ids[0]) or scene_pov
+
+
+def _resolve_scene_reuse_event_ids(
+    *,
+    linked_event_id: str | None,
+    compatible_event_ids: list[str],
+    compatible_event_ids_ambiguous: bool,
+    record_id: str,
+) -> tuple[list[str], list[str], list[str], bool]:
+    if linked_event_id:
+        return [linked_event_id], [], [], False
+    if len(compatible_event_ids) == 1:
+        return compatible_event_ids, [], [], False
+    if compatible_event_ids_ambiguous:
+        return (
+            [],
+            [f"场景 `{record_id}` 命中了多条同样兼容的旧事件，事件关联需要人工确认。"],
+            ["reuse-ambiguity-linked-events"],
+            True,
+        )
+    return [], [], [], False
+
+
 def _build_default_timeline_merge_input(
     workspace: Path,
     idea: dict[str, Any],
@@ -2791,6 +2890,44 @@ def _patch_suggestion_ids(report: dict[str, Any], issue_code: str) -> list[str]:
     return [str(item) for item in ids]
 
 
+def _issue_priority(issue_code: str) -> int:
+    order = {
+        "timeline-order-conflict": 0,
+        "knowledge-state-conflict": 1,
+        "location-continuity-conflict": 2,
+    }
+    return order.get(issue_code, 99)
+
+
+def _issue_record_groups(report: dict[str, Any]) -> list[tuple[str, str, list[dict[str, Any]]]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    ordered_keys: list[tuple[str, str]] = []
+    for issue in report.get("issues", []):
+        issue_code = str(issue.get("code") or "")
+        if issue_code not in TIMELINE_RELEVANT_ISSUES:
+            continue
+        details = issue.get("details", {}) if isinstance(issue.get("details"), dict) else {}
+        record_type = str(details.get("record_type") or "")
+        record_id = str(details.get("record_id") or "")
+        if not record_type or not record_id:
+            continue
+        key = (record_type, record_id)
+        if key not in grouped:
+            grouped[key] = []
+            ordered_keys.append(key)
+        grouped[key].append(issue)
+    return [(record_type, record_id, grouped[(record_type, record_id)]) for record_type, record_id in ordered_keys]
+
+
+def _merged_patch_suggestion_ids(report: dict[str, Any], issues: list[dict[str, Any]]) -> list[str]:
+    suggestion_ids: list[str] = []
+    for issue in issues:
+        for suggestion_id in _patch_suggestion_ids(report, str(issue.get("code") or "")):
+            if suggestion_id not in suggestion_ids:
+                suggestion_ids.append(suggestion_id)
+    return suggestion_ids
+
+
 def _build_issue_driven_timeline_merge_inputs(
     workspace: Path,
     idea: dict[str, Any],
@@ -2807,21 +2944,28 @@ def _build_issue_driven_timeline_merge_inputs(
     _, id_to_name = _character_lookup(canon_index)
     default_apply_args, _, _ = _default_timeline_apply_args(workspace, idea, draft, domains)
     inputs: list[dict[str, Any]] = []
-    seen_records: set[tuple[str, str, str]] = set()
-
-    for issue in report.get("issues", []):
-        issue_code = str(issue.get("code") or "")
-        if issue_code not in TIMELINE_RELEVANT_ISSUES:
-            continue
-        details = issue.get("details", {}) if isinstance(issue.get("details"), dict) else {}
-        record_type = str(details.get("record_type") or "")
-        record_id = str(details.get("record_id") or "")
-        if not record_type or not record_id:
-            continue
-        issue_key = (issue_code, record_type, record_id)
-        if issue_key in seen_records:
-            continue
-        seen_records.add(issue_key)
+    for record_type, record_id, record_issues in _issue_record_groups(report):
+        primary_issue = min(record_issues, key=lambda item: _issue_priority(str(item.get("code") or "")))
+        issue_code = str(primary_issue.get("code") or "")
+        details = primary_issue.get("details", {}) if isinstance(primary_issue.get("details"), dict) else {}
+        draft_chapter = next(
+            (
+                issue_details.get("draft_chapter")
+                for issue in record_issues
+                for issue_details in [(issue.get("details", {}) if isinstance(issue.get("details"), dict) else {})]
+                if isinstance(issue_details.get("draft_chapter"), int)
+            ),
+            None,
+        )
+        draft_location_from_issues = next(
+            (
+                str(issue_details.get("draft_location") or "").strip()
+                for issue in record_issues
+                for issue_details in [(issue.get("details", {}) if isinstance(issue.get("details"), dict) else {})]
+                if str(issue_details.get("draft_location") or "").strip()
+            ),
+            "",
+        )
 
         apply_args: dict[str, Any] = {}
         target_files: list[str] = []
@@ -2837,32 +2981,28 @@ def _build_issue_driven_timeline_merge_inputs(
             existing_location = str(event.get("location") or "").strip()
             if draft_location and existing_location and not _location_keys_match(draft_location, existing_location):
                 continue
-            event_label = str(event.get("label") or "").strip()
+            event_label = _first_non_empty_text(default_apply_args.get("event_label"), event.get("label"))
             linked_scene_character_ids, linked_scene_character_ids_ambiguous = _linked_scene_character_ids_for_event(
                 scenes,
                 event_id=record_id,
                 event_label=event_label,
                 draft_location=draft_location,
             )
-            participant_ids = default_apply_args.get("participant_ids") or linked_scene_character_ids
-            if not participant_ids and linked_scene_character_ids_ambiguous:
-                participant_ids = []
-                item_warnings.append(
-                    f"事件 `{record_id}` 命中了多条角色集合冲突的 linked scenes，参与者需要人工确认。"
-                )
-                item_review_tokens.append("reuse-ambiguity-linked-scenes")
-            elif not participant_ids:
-                participant_ids = list(event.get("participants", []))
-            reading_chapter = details.get("draft_chapter") if isinstance(details.get("draft_chapter"), int) else event.get("reading_chapter")
-            location = details.get("draft_location")
+            participant_ids, participant_warnings, participant_review_tokens = _resolve_event_reuse_participants(
+                preferred_participant_ids=default_apply_args.get("participant_ids"),
+                linked_scene_character_ids=linked_scene_character_ids,
+                linked_scene_character_ids_ambiguous=linked_scene_character_ids_ambiguous,
+                existing_participant_ids=list(event.get("participants", [])),
+                record_id=record_id,
+            )
+            item_warnings.extend(participant_warnings)
+            item_review_tokens.extend(participant_review_tokens)
+            reading_chapter = draft_chapter if isinstance(draft_chapter, int) else event.get("reading_chapter")
+            location = draft_location_from_issues
             if not isinstance(location, str) or not location.strip():
-                location = existing_location or None
+                location = _first_non_empty_text(default_apply_args.get("location"), existing_location) or None
             chronological_index = event.get("chronological_index")
-            if (
-                issue_code == "timeline-order-conflict"
-                and isinstance(reading_chapter, int)
-                and reading_chapter != event.get("reading_chapter")
-            ):
+            if isinstance(reading_chapter, int) and reading_chapter != event.get("reading_chapter"):
                 chronological_index = _suggest_chronological_index(
                     [item for item in events if str(item.get("id") or "") != record_id],
                     reading_chapter,
@@ -2876,10 +3016,10 @@ def _build_issue_driven_timeline_merge_inputs(
                 "reading_chapter": reading_chapter,
                 "location": location,
                 "participant_ids": participant_ids,
-                "event_notes": default_apply_args.get("event_notes") or str(event.get("notes") or ""),
+                "event_notes": _first_non_empty_text(default_apply_args.get("event_notes"), event.get("notes")),
             }
             target_files = ["timeline/events.json"]
-            if not event.get("label"):
+            if not apply_args["event_label"]:
                 missing_fields.append("event_label")
             if not isinstance(reading_chapter, int):
                 missing_fields.append("reading_chapter")
@@ -2891,10 +3031,15 @@ def _build_issue_driven_timeline_merge_inputs(
             if not record:
                 continue
             scene = record.get("scene", {})
-            chapter_number = details.get("draft_chapter") if isinstance(details.get("draft_chapter"), int) else record.get("chapter")
+            chapter_number = draft_chapter if isinstance(draft_chapter, int) else record.get("chapter")
             scene_status = default_apply_args.get("scene_status") or scene.get("status") or "planned"
             draft_location = _first_text(draft.get("location_candidates", []))
-            scene_event_label = str(default_apply_args.get("event_label") or scene.get("title") or "").strip()
+            scene_event_label = str(
+                default_apply_args.get("event_label")
+                or default_apply_args.get("scene_title")
+                or scene.get("title")
+                or ""
+            ).strip()
             linked_event_id = _matching_existing_event_id_for_draft(
                 events,
                 event_label=scene_event_label,
@@ -2902,15 +3047,17 @@ def _build_issue_driven_timeline_merge_inputs(
             )
             linked_event = event_map.get(linked_event_id) if linked_event_id else None
             linked_participant_ids = list(linked_event.get("participants", [])) if linked_event else []
-            scene_character_ids = (
-                default_apply_args.get("scene_character_ids")
-                or linked_participant_ids
-                or list(scene.get("characters", []))
+            scene_character_ids = _first_non_empty_id_list(
+                default_apply_args.get("scene_character_ids"),
+                linked_participant_ids,
+                list(scene.get("characters", [])),
             )
-            scene_pov = (
-                default_apply_args.get("scene_pov")
-                or (id_to_name.get(linked_participant_ids[0]) if linked_participant_ids else None)
-                or scene.get("pov")
+            scene_pov = _resolve_scene_pov_from_candidates(
+                preferred_pov=str(default_apply_args.get("scene_pov") or "").strip() or None,
+                linked_participant_ids=linked_participant_ids,
+                existing_pov=str(scene.get("pov") or "").strip() or None,
+                fallback_character_ids=scene_character_ids,
+                id_to_name=id_to_name,
             )
             compatible_existing_event_ids = _compatible_scene_event_ids_for_draft(
                 list(scene.get("event_ids", [])),
@@ -2919,30 +3066,30 @@ def _build_issue_driven_timeline_merge_inputs(
                 draft_location=draft_location,
             )
             compatible_event_ids, compatible_event_ids_ambiguous = compatible_existing_event_ids
-            scene_event_ids = [linked_event_id] if linked_event_id else (
-                compatible_event_ids if len(compatible_event_ids) == 1 else []
+            scene_event_ids, event_warnings, event_review_tokens, scene_event_ids_missing = _resolve_scene_reuse_event_ids(
+                linked_event_id=linked_event_id,
+                compatible_event_ids=compatible_event_ids,
+                compatible_event_ids_ambiguous=compatible_event_ids_ambiguous,
+                record_id=record_id,
             )
-            if not linked_event_id and compatible_event_ids_ambiguous:
-                item_warnings.append(
-                    f"场景 `{record_id}` 命中了多条同样兼容的旧事件，事件关联需要人工确认。"
-                )
-                item_review_tokens.append("reuse-ambiguity-linked-events")
+            item_warnings.extend(event_warnings)
+            item_review_tokens.extend(event_review_tokens)
             apply_args = {
                 "chapter_number": chapter_number,
                 "scene_id": record_id,
-                "scene_title": scene.get("title"),
+                "scene_title": _first_non_empty_text(default_apply_args.get("scene_title"), scene.get("title")),
                 "scene_pov": scene_pov,
                 "scene_status": scene_status,
                 "scene_character_ids": scene_character_ids,
                 "scene_event_ids": scene_event_ids,
-                "scene_notes": default_apply_args.get("scene_notes") or str(scene.get("notes") or ""),
+                "scene_notes": _first_non_empty_text(default_apply_args.get("scene_notes"), scene.get("notes")),
             }
             target_files = ["outline/scene-index.json", "outline/master-outline.md"]
-            if not scene.get("title"):
+            if not apply_args["scene_title"]:
                 missing_fields.append("scene_title")
             if not isinstance(chapter_number, int):
                 missing_fields.append("chapter_number")
-            if not scene_event_ids and compatible_event_ids_ambiguous:
+            if scene_event_ids_missing:
                 missing_fields.append("scene_event_ids")
             strategy = "update-existing-scene"
         else:
@@ -2953,16 +3100,16 @@ def _build_issue_driven_timeline_merge_inputs(
                 "id": f"timeline-merge-{len(inputs) + 1:03d}",
                 "kind": "timeline-merge-input",
                 "strategy": strategy,
-                "summary": _summary_for_issue_input(issue, issue_code, record_id),
+                "summary": _summary_for_issue_input(primary_issue, issue_code, record_id),
                 "target_files": target_files,
                 "source_issue_code": issue_code,
-                "source_patch_suggestion_ids": _patch_suggestion_ids(report, issue_code),
+                "source_patch_suggestion_ids": _merged_patch_suggestion_ids(report, record_issues),
                 "missing_fields": missing_fields,
                 "can_apply_directly": gate.get("can_apply_merge", False) and not missing_fields,
                 "requires_override": gate.get("status") == "blocked",
                 "warnings": item_warnings,
                 "review_tokens": item_review_tokens,
-                "resolution_note_suggestion": str(issue.get("message") or ""),
+                "resolution_note_suggestion": str(primary_issue.get("message") or ""),
                 "apply_args": apply_args,
             }
         )
@@ -3393,7 +3540,7 @@ def _build_timeline_merge_inputs(
         inputs.append(default_relationship_input)
     inputs.extend(_build_default_knowledge_merge_inputs(workspace, idea, draft, report, gate))
 
-    return _dedupe_merge_inputs(inputs)
+    return _renumber_story_merge_inputs(_dedupe_merge_inputs(inputs))
 
 
 def _merge_input_identity(item: dict[str, Any]) -> tuple[str, ...]:
@@ -3428,6 +3575,52 @@ def _merge_input_score(item: dict[str, Any]) -> tuple[int, int, int, int]:
     )
 
 
+def _merge_input_value_present(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return bool(value)
+    return True
+
+
+def _merge_missing_field_satisfied(field: str, apply_args: dict[str, Any]) -> bool:
+    return _merge_input_value_present(apply_args.get(field))
+
+
+def _merge_input_apply_args(primary: dict[str, Any], secondary: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    merged = dict(secondary)
+    merged.update(primary)
+    conflicts: list[str] = []
+    for key, secondary_value in secondary.items():
+        primary_value = primary.get(key)
+        if isinstance(primary_value, list) and isinstance(secondary_value, list):
+            merged[key] = list(
+                dict.fromkeys(
+                    value
+                    for value in [*primary_value, *secondary_value]
+                    if _merge_input_value_present(value)
+                )
+            )
+            continue
+        if isinstance(primary_value, dict) and isinstance(secondary_value, dict):
+            nested = dict(secondary_value)
+            nested.update(primary_value)
+            merged[key] = nested
+            continue
+        if not _merge_input_value_present(primary_value) and _merge_input_value_present(secondary_value):
+            merged[key] = secondary_value
+            continue
+        if (
+            _merge_input_value_present(primary_value)
+            and _merge_input_value_present(secondary_value)
+            and primary_value != secondary_value
+        ):
+            conflicts.append(f"dedupe-apply-args-conflict:{key}")
+    return merged, conflicts
+
+
 def _dedupe_merge_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deduped: list[dict[str, Any]] = []
     index_by_identity: dict[tuple[str, ...], int] = {}
@@ -3447,6 +3640,24 @@ def _dedupe_merge_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
             else (current, item)
         )
         merged = dict(preferred)
+        merged_apply_args, apply_arg_conflicts = _merge_input_apply_args(
+            preferred.get("apply_args", {}) if isinstance(preferred.get("apply_args"), dict) else {},
+            secondary.get("apply_args", {}) if isinstance(secondary.get("apply_args"), dict) else {},
+        )
+        merged_missing_fields = sorted(
+            {
+                str(value)
+                for value in [*current.get("missing_fields", []), *item.get("missing_fields", [])]
+                if str(value).strip() and not _merge_missing_field_satisfied(str(value).strip(), merged_apply_args)
+            }
+        )
+        merged_resolves_issue_codes = list(
+            dict.fromkeys(
+                str(value)
+                for value in [*current.get("resolves_issue_codes", []), *item.get("resolves_issue_codes", [])]
+                if str(value).strip()
+            )
+        )
         merged["target_files"] = sorted(
             {
                 str(path)
@@ -3464,16 +3675,26 @@ def _dedupe_merge_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         merged["warnings"] = list(
             dict.fromkeys(
                 str(value)
-                for value in [*current.get("warnings", []), *item.get("warnings", [])]
+                for value in [*current.get("warnings", []), *item.get("warnings", []), *apply_arg_conflicts]
                 if str(value).strip()
             )
         )
-        merged["missing_fields"] = sorted(
-            {
+        merged["review_tokens"] = list(
+            dict.fromkeys(
                 str(value)
-                for value in [*current.get("missing_fields", []), *item.get("missing_fields", [])]
+                for value in [*current.get("review_tokens", []), *item.get("review_tokens", [])]
                 if str(value).strip()
-            }
+            )
+        )
+        merged["missing_fields"] = merged_missing_fields
+        merged["resolves_issue_codes"] = merged_resolves_issue_codes
+        merged["apply_args"] = merged_apply_args
+        merged["can_apply_directly"] = not merged_missing_fields and (
+            bool(current.get("can_apply_directly")) or bool(item.get("can_apply_directly"))
+        )
+        merged["requires_override"] = bool(current.get("requires_override")) and bool(item.get("requires_override"))
+        merged["resolves_blocked_gate"] = not merged_missing_fields and (
+            bool(merged_resolves_issue_codes) or bool(current.get("resolves_blocked_gate")) or bool(item.get("resolves_blocked_gate"))
         )
         if not merged.get("source_issue_code"):
             merged["source_issue_code"] = secondary.get("source_issue_code")
@@ -3482,6 +3703,22 @@ def _dedupe_merge_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         deduped[existing_index] = merged
 
     return deduped
+
+
+def _renumber_story_merge_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    story_index = 1
+    renumbered: list[dict[str, Any]] = []
+    for item in inputs:
+        item_id = str(item.get("id") or "").strip()
+        suffix = item_id.removeprefix("timeline-merge-")
+        if item_id.startswith("timeline-merge-") and suffix.isdigit():
+            updated = dict(item)
+            updated["id"] = f"timeline-merge-{story_index:03d}"
+            renumbered.append(updated)
+            story_index += 1
+            continue
+        renumbered.append(item)
+    return renumbered
 
 
 def _render_merge_plan_html(plan: dict[str, Any]) -> str:

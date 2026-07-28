@@ -11,9 +11,20 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from novel_outline_workspace import check_idea_consistency
 from novel_outline_workspace.constraints_review import record_constraints_review_decision, review_constraints
-from novel_outline_workspace.merge import _constraints_group_explainer, apply_idea_merge, plan_idea_merge
+from novel_outline_workspace.merge import (
+    _dedupe_merge_inputs,
+    _build_issue_driven_timeline_merge_inputs,
+    _constraints_group_explainer,
+    apply_idea_merge,
+    plan_idea_merge,
+)
 from novel_outline_workspace.orchestrator import run_outline_workspace_pipeline
-from novel_outline_workspace.reuse_review import record_reuse_review_decision, review_reuse
+from novel_outline_workspace.reuse_review import (
+    _combined_remaining_review_inputs,
+    _remaining_review_input_snapshots,
+    record_reuse_review_decision,
+    review_reuse,
+)
 from novel_outline_workspace.workspace import (
     backfill_intake_drafts,
     collect_workspace_status,
@@ -1307,6 +1318,123 @@ class WorkspaceTests(unittest.TestCase):
             moved_event = next(item for item in events if item["id"] == "event-faction-truth")
             self.assertEqual(moved_event["participants"], ["char-protagonist", "char-shijie"])
 
+    def test_update_existing_event_backfills_empty_label_from_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            write_json(
+                workspace / "timeline/events.json",
+                {
+                    "events": [
+                        {
+                            "id": "event-legacy",
+                            "label": "",
+                            "chronological_index": 7,
+                            "reading_chapter": 7,
+                            "participants": ["char-protagonist"],
+                            "location": "白塔议事厅",
+                            "notes": "旧 event 缺标题。",
+                        }
+                    ]
+                },
+            )
+            idea = {
+                "id": "idea-001",
+                "title": "白塔夜审",
+                "content": "林舟在第三章白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+            }
+            draft = {
+                "chapter_hints": [3],
+                "location_candidates": ["白塔议事厅"],
+                "character_mentions": ["林舟"],
+                "timeline_candidates": [{"event_label": "白塔夜审", "participant_candidates": ["林舟"]}],
+            }
+            report = {
+                "issues": [
+                    {
+                        "code": "timeline-order-conflict",
+                        "details": {
+                            "record_type": "event",
+                            "record_id": "event-legacy",
+                            "existing_chapter": 7,
+                            "draft_chapter": 3,
+                        },
+                    }
+                ],
+                "patch_suggestions": [],
+            }
+            gate = {"warnings": [], "can_apply_merge": True, "status": "ready"}
+
+            inputs = _build_issue_driven_timeline_merge_inputs(
+                workspace,
+                idea,
+                ["timeline"],
+                draft,
+                report,
+                gate,
+            )
+            merge_input = next(item for item in inputs if item["strategy"] == "update-existing-event")
+            self.assertEqual(merge_input["apply_args"]["event_label"], "白塔夜审")
+            self.assertNotIn("event_label", merge_input["missing_fields"])
+
+    def test_update_existing_event_backfills_empty_location_from_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            write_json(
+                workspace / "timeline/events.json",
+                {
+                    "events": [
+                        {
+                            "id": "event-legacy",
+                            "label": "白塔夜审",
+                            "chronological_index": 7,
+                            "reading_chapter": 7,
+                            "participants": ["char-protagonist"],
+                            "location": "",
+                            "notes": "旧 event 缺地点。",
+                        }
+                    ]
+                },
+            )
+            idea = {
+                "id": "idea-003",
+                "title": "白塔夜审",
+                "content": "林舟在第三章白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+            }
+            draft = {
+                "chapter_hints": [3],
+                "location_candidates": ["白塔议事厅"],
+                "character_mentions": ["林舟"],
+                "timeline_candidates": [{"event_label": "白塔夜审", "participant_candidates": ["林舟"]}],
+            }
+            report = {
+                "issues": [
+                    {
+                        "code": "timeline-order-conflict",
+                        "details": {
+                            "record_type": "event",
+                            "record_id": "event-legacy",
+                            "existing_chapter": 7,
+                            "draft_chapter": 3,
+                        },
+                    }
+                ],
+                "patch_suggestions": [],
+            }
+            gate = {"warnings": [], "can_apply_merge": True, "status": "ready"}
+
+            inputs = _build_issue_driven_timeline_merge_inputs(
+                workspace,
+                idea,
+                ["timeline"],
+                draft,
+                report,
+                gate,
+            )
+            merge_input = next(item for item in inputs if item["strategy"] == "update-existing-event")
+            self.assertEqual(merge_input["apply_args"]["location"], "白塔议事厅")
+
     def test_update_existing_event_syncs_participants_from_linked_scene_when_draft_has_no_characters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp) / "demo"
@@ -1395,6 +1523,88 @@ class WorkspaceTests(unittest.TestCase):
             events = read_json(workspace / "timeline/events.json", {"events": []})["events"]
             moved_event = next(item for item in events if item["id"] == "event-faction-truth")
             self.assertEqual(moved_event["participants"], ["char-protagonist"])
+
+    def test_update_existing_event_prefers_direct_linked_scene_even_when_old_scene_title_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            write_json(
+                workspace / "timeline/events.json",
+                {
+                    "events": [
+                        {
+                            "id": "event-faction-truth",
+                            "label": "旧夜审",
+                            "chronological_index": 7,
+                            "reading_chapter": 7,
+                            "participants": ["char-shijie"],
+                            "location": "白塔议事厅",
+                            "notes": "旧 event 残留成了师姐参与。",
+                        }
+                    ]
+                },
+            )
+            write_json(
+                workspace / "outline/scene-index.json",
+                {
+                    "chapters": [
+                        {
+                            "chapter": 7,
+                            "title": "第七章",
+                            "summary": "",
+                            "scenes": [
+                                {
+                                    "id": "scene-faction-truth",
+                                    "title": "旧夜审",
+                                    "pov": "林舟",
+                                    "status": "planned",
+                                    "characters": ["char-protagonist"],
+                                    "event_ids": ["event-faction-truth"],
+                                    "notes": "旧 scene 还保留着旧标题，但 event_id 直连是对的。",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+            idea = {
+                "id": "idea-006",
+                "title": "白塔夜审",
+                "content": "在第三章白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+            }
+            draft = {
+                "chapter_hints": [3],
+                "location_candidates": ["白塔议事厅"],
+                "character_mentions": [],
+                "timeline_candidates": [{"event_label": "白塔夜审", "participant_candidates": []}],
+            }
+            report = {
+                "issues": [
+                    {
+                        "code": "timeline-order-conflict",
+                        "details": {
+                            "record_type": "event",
+                            "record_id": "event-faction-truth",
+                            "existing_chapter": 7,
+                            "draft_chapter": 3,
+                        },
+                    }
+                ],
+                "patch_suggestions": [],
+            }
+            gate = {"warnings": [], "can_apply_merge": True, "status": "ready"}
+
+            inputs = _build_issue_driven_timeline_merge_inputs(
+                workspace,
+                idea,
+                ["timeline"],
+                draft,
+                report,
+                gate,
+            )
+            merge_input = next(item for item in inputs if item["strategy"] == "update-existing-event")
+            self.assertEqual(merge_input["apply_args"]["event_label"], "白塔夜审")
+            self.assertEqual(merge_input["apply_args"]["participant_ids"], ["char-protagonist"])
 
     def test_update_existing_event_marks_participants_missing_when_linked_scenes_conflict(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1884,6 +2094,303 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(updated_scene["pov"], "林舟")
             self.assertEqual(updated_scene["characters"], ["char-protagonist"])
             self.assertEqual(updated_scene["event_ids"], ["event-faction-truth"])
+
+    def test_update_existing_scene_backfills_empty_title_from_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            write_json(
+                workspace / "outline/scene-index.json",
+                {
+                    "chapters": [
+                        {
+                            "chapter": 7,
+                            "title": "第七章",
+                            "summary": "",
+                            "scenes": [
+                                {
+                                    "id": "scene-legacy",
+                                    "title": "",
+                                    "pov": "",
+                                    "status": "planned",
+                                    "characters": ["char-protagonist"],
+                                    "event_ids": [],
+                                    "notes": "旧 scene 缺标题。",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+            idea = {
+                "id": "idea-002",
+                "title": "白塔夜审",
+                "content": "林舟在第三章白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+            }
+            draft = {
+                "chapter_hints": [3],
+                "location_candidates": ["白塔议事厅"],
+                "character_mentions": ["林舟"],
+                "outline_candidates": [{"scene_title": "白塔夜审"}],
+            }
+            report = {
+                "issues": [
+                    {
+                        "code": "timeline-order-conflict",
+                        "details": {
+                            "record_type": "scene",
+                            "record_id": "scene-legacy",
+                            "existing_chapter": 7,
+                            "draft_chapter": 3,
+                        },
+                    }
+                ],
+                "patch_suggestions": [],
+            }
+            gate = {"warnings": [], "can_apply_merge": True, "status": "ready"}
+
+            inputs = _build_issue_driven_timeline_merge_inputs(
+                workspace,
+                idea,
+                ["outline"],
+                draft,
+                report,
+                gate,
+            )
+            merge_input = next(item for item in inputs if item["strategy"] == "update-existing-scene")
+            self.assertEqual(merge_input["apply_args"]["scene_title"], "白塔夜审")
+            self.assertNotIn("scene_title", merge_input["missing_fields"])
+
+    def test_update_existing_scene_backfills_empty_pov_from_existing_characters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            write_json(
+                workspace / "outline/scene-index.json",
+                {
+                    "chapters": [
+                        {
+                            "chapter": 7,
+                            "title": "第七章",
+                            "summary": "",
+                            "scenes": [
+                                {
+                                    "id": "scene-legacy",
+                                    "title": "白塔夜审",
+                                    "pov": "",
+                                    "status": "planned",
+                                    "characters": ["char-protagonist"],
+                                    "event_ids": [],
+                                    "notes": "旧 scene 缺 POV。",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+            idea = {
+                "id": "idea-004",
+                "title": "白塔夜审",
+                "content": "第三章的白塔夜审保持主角视角。",
+            }
+            draft = {
+                "chapter_hints": [3],
+                "location_candidates": ["白塔议事厅"],
+                "character_mentions": [],
+                "timeline_candidates": [{"participant_candidates": []}],
+                "outline_candidates": [{"scene_title": "白塔夜审"}],
+            }
+            report = {
+                "issues": [
+                    {
+                        "code": "timeline-order-conflict",
+                        "details": {
+                            "record_type": "scene",
+                            "record_id": "scene-legacy",
+                            "existing_chapter": 7,
+                            "draft_chapter": 3,
+                        },
+                    }
+                ],
+                "patch_suggestions": [],
+            }
+            gate = {"warnings": [], "can_apply_merge": True, "status": "ready"}
+
+            inputs = _build_issue_driven_timeline_merge_inputs(
+                workspace,
+                idea,
+                ["outline"],
+                draft,
+                report,
+                gate,
+            )
+            merge_input = next(item for item in inputs if item["strategy"] == "update-existing-scene")
+            self.assertEqual(merge_input["apply_args"]["scene_character_ids"], ["char-protagonist"])
+            self.assertEqual(merge_input["apply_args"]["scene_pov"], "林舟")
+
+    def test_update_existing_scene_prefers_draft_title_when_matching_linked_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            write_json(
+                workspace / "timeline/events.json",
+                {
+                    "events": [
+                        {
+                            "id": "event-new-title",
+                            "label": "白塔夜审",
+                            "chronological_index": 3,
+                            "reading_chapter": 3,
+                            "participants": ["char-protagonist"],
+                            "location": "白塔议事厅",
+                            "notes": "新标题对应的 event。",
+                        }
+                    ]
+                },
+            )
+            write_json(
+                workspace / "outline/scene-index.json",
+                {
+                    "chapters": [
+                        {
+                            "chapter": 7,
+                            "title": "第七章",
+                            "summary": "",
+                            "scenes": [
+                                {
+                                    "id": "scene-legacy",
+                                    "title": "旧夜审",
+                                    "pov": "林舟",
+                                    "status": "planned",
+                                    "characters": ["char-protagonist"],
+                                    "event_ids": [],
+                                    "notes": "旧 scene 还保留着旧标题。",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+            idea = {
+                "id": "idea-005",
+                "title": "白塔夜审",
+                "content": "第三章白塔议事厅这场戏现在统一叫白塔夜审。",
+            }
+            draft = {
+                "chapter_hints": [3],
+                "location_candidates": ["白塔议事厅"],
+                "character_mentions": ["林舟"],
+                "outline_candidates": [{"scene_title": "白塔夜审"}],
+            }
+            report = {
+                "issues": [
+                    {
+                        "code": "timeline-order-conflict",
+                        "details": {
+                            "record_type": "scene",
+                            "record_id": "scene-legacy",
+                            "existing_chapter": 7,
+                            "draft_chapter": 3,
+                        },
+                    }
+                ],
+                "patch_suggestions": [],
+            }
+            gate = {"warnings": [], "can_apply_merge": True, "status": "ready"}
+
+            inputs = _build_issue_driven_timeline_merge_inputs(
+                workspace,
+                idea,
+                ["outline"],
+                draft,
+                report,
+                gate,
+            )
+            merge_input = next(item for item in inputs if item["strategy"] == "update-existing-scene")
+            self.assertEqual(merge_input["apply_args"]["scene_title"], "白塔夜审")
+            self.assertEqual(merge_input["apply_args"]["scene_event_ids"], ["event-new-title"])
+
+    def test_update_existing_scene_keeps_direct_event_id_even_when_old_event_label_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            write_json(
+                workspace / "timeline/events.json",
+                {
+                    "events": [
+                        {
+                            "id": "event-legacy",
+                            "label": "旧夜审",
+                            "chronological_index": 7,
+                            "reading_chapter": 7,
+                            "participants": ["char-protagonist"],
+                            "location": "白塔议事厅",
+                            "notes": "旧 event 还保留着旧标题。",
+                        }
+                    ]
+                },
+            )
+            write_json(
+                workspace / "outline/scene-index.json",
+                {
+                    "chapters": [
+                        {
+                            "chapter": 7,
+                            "title": "第七章",
+                            "summary": "",
+                            "scenes": [
+                                {
+                                    "id": "scene-legacy",
+                                    "title": "旧夜审",
+                                    "pov": "林舟",
+                                    "status": "planned",
+                                    "characters": ["char-protagonist"],
+                                    "event_ids": ["event-legacy"],
+                                    "notes": "旧 scene / event 直连还在，但标题已过时。",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+            idea = {
+                "id": "idea-007",
+                "title": "白塔夜审",
+                "content": "第三章白塔议事厅这场戏现在统一叫白塔夜审。",
+            }
+            draft = {
+                "chapter_hints": [3],
+                "location_candidates": ["白塔议事厅"],
+                "character_mentions": ["林舟"],
+                "outline_candidates": [{"scene_title": "白塔夜审"}],
+            }
+            report = {
+                "issues": [
+                    {
+                        "code": "timeline-order-conflict",
+                        "details": {
+                            "record_type": "scene",
+                            "record_id": "scene-legacy",
+                            "existing_chapter": 7,
+                            "draft_chapter": 3,
+                        },
+                    }
+                ],
+                "patch_suggestions": [],
+            }
+            gate = {"warnings": [], "can_apply_merge": True, "status": "ready"}
+
+            inputs = _build_issue_driven_timeline_merge_inputs(
+                workspace,
+                idea,
+                ["outline"],
+                draft,
+                report,
+                gate,
+            )
+            merge_input = next(item for item in inputs if item["strategy"] == "update-existing-scene")
+            self.assertEqual(merge_input["apply_args"]["scene_title"], "白塔夜审")
+            self.assertEqual(merge_input["apply_args"]["scene_event_ids"], ["event-legacy"])
 
     def test_update_existing_event_exposes_notes_sync_in_merge_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4769,6 +5276,7 @@ class WorkspaceTests(unittest.TestCase):
             status = collect_workspace_status(workspace)
             self.assertIn("event / scene reuse 歧义", status["recommended_next_step"])
             self.assertIn("白塔夜审", status["recommended_next_step"])
+            self.assertIn("仍待确认 reuse 歧义", status["recommended_next_step"])
 
             pipeline = run_outline_workspace_pipeline(workspace)
             self.assertEqual(pipeline["recommended_action"], "review-reuse")
@@ -4781,6 +5289,274 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(executed["reuse_review"]["idea_id"], idea_id)
             self.assertEqual(executed["reuse_review"]["review_tokens"], ["reuse-ambiguity-linked-events"])
             self.assertTrue(Path(executed["reuse_review"]["report_path"]).exists())
+
+    def test_merge_plan_assigns_unique_story_merge_input_ids_with_issue_and_default_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            write_json(
+                workspace / "timeline/events.json",
+                {
+                    "events": [
+                        {
+                            "id": "event-faction-truth-a",
+                            "label": "白塔夜审",
+                            "chronological_index": 7,
+                            "reading_chapter": 7,
+                            "participants": ["char-protagonist"],
+                            "location": "白塔",
+                            "notes": "林舟在白塔第一次意识到议会和黑潮并非同一阵营。",
+                        },
+                        {
+                            "id": "event-faction-truth-b",
+                            "label": "白塔夜审",
+                            "chronological_index": 8,
+                            "reading_chapter": 8,
+                            "participants": ["char-protagonist"],
+                            "location": "白塔议事厅",
+                            "notes": "林舟在白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+                        },
+                    ]
+                },
+            )
+            write_json(
+                workspace / "outline/scene-index.json",
+                {
+                    "chapters": [
+                        {
+                            "chapter": 7,
+                            "title": "第七章",
+                            "summary": "",
+                            "scenes": [
+                                {
+                                    "id": "scene-faction-truth",
+                                    "title": "白塔夜审",
+                                    "pov": "林舟",
+                                    "status": "planned",
+                                    "characters": ["char-protagonist"],
+                                    "event_ids": ["event-faction-truth-a", "event-faction-truth-b"],
+                                    "notes": "林舟在白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+            result = ingest_idea(
+                workspace,
+                title="白塔夜审",
+                content="林舟在第三章白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+                kind="scene",
+            )
+            idea_id = result["idea"]["id"]
+            check_idea_consistency(workspace, idea_id)
+
+            plan = plan_idea_merge(workspace, idea_id)
+            story_ids = [
+                str(item["id"])
+                for item in plan["timeline_merge_inputs"]
+                if str(item.get("id") or "").startswith("timeline-merge-")
+                and str(item.get("id") or "").removeprefix("timeline-merge-").isdigit()
+            ]
+            self.assertGreaterEqual(len(story_ids), 2)
+            self.assertEqual(len(story_ids), len(set(story_ids)))
+
+    def test_dedupe_merge_inputs_unions_review_tokens_resolve_codes_and_backfills_apply_args(self) -> None:
+        merged = _dedupe_merge_inputs(
+            [
+                {
+                    "id": "timeline-merge-001",
+                    "kind": "timeline-merge-input",
+                    "strategy": "update-existing-event",
+                    "summary": "更新事件",
+                    "target_files": ["timeline/events.json"],
+                    "source_issue_code": "timeline-order-conflict",
+                    "source_patch_suggestion_ids": ["patch-a"],
+                    "missing_fields": ["participant_ids"],
+                    "can_apply_directly": False,
+                    "requires_override": True,
+                    "resolves_blocked_gate": False,
+                    "resolves_issue_codes": [],
+                    "warnings": ["needs-participants"],
+                    "review_tokens": ["reuse-ambiguity-linked-scenes"],
+                    "apply_args": {
+                        "event_id": "event-001",
+                        "reading_chapter": 3,
+                        "participant_ids": [],
+                    },
+                },
+                {
+                    "id": "timeline-merge-002",
+                    "kind": "timeline-merge-input",
+                    "strategy": "update-existing-event",
+                    "summary": "更新事件",
+                    "target_files": ["outline/scene-index.json"],
+                    "source_issue_code": "location-continuity-conflict",
+                    "source_patch_suggestion_ids": ["patch-b"],
+                    "missing_fields": [],
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "resolves_blocked_gate": True,
+                    "resolves_issue_codes": ["location-continuity-conflict"],
+                    "warnings": [],
+                    "review_tokens": [],
+                    "apply_args": {
+                        "event_id": "event-001",
+                        "reading_chapter": 3,
+                        "participant_ids": ["char-protagonist"],
+                    },
+                },
+            ]
+        )
+        self.assertEqual(len(merged), 1)
+        item = merged[0]
+        self.assertEqual(item["target_files"], ["outline/scene-index.json", "timeline/events.json"])
+        self.assertEqual(item["source_patch_suggestion_ids"], ["patch-a", "patch-b"])
+        self.assertEqual(item["review_tokens"], ["reuse-ambiguity-linked-scenes"])
+        self.assertEqual(item["resolves_issue_codes"], ["location-continuity-conflict"])
+        self.assertEqual(item["apply_args"]["participant_ids"], ["char-protagonist"])
+        self.assertEqual(item["missing_fields"], [])
+        self.assertTrue(item["can_apply_directly"])
+        self.assertFalse(item["requires_override"])
+        self.assertTrue(item["resolves_blocked_gate"])
+
+    def test_dedupe_merge_inputs_marks_conflicting_scalar_apply_args_in_warnings(self) -> None:
+        merged = _dedupe_merge_inputs(
+            [
+                {
+                    "id": "timeline-merge-001",
+                    "kind": "timeline-merge-input",
+                    "strategy": "update-existing-event",
+                    "summary": "更新事件",
+                    "target_files": ["timeline/events.json"],
+                    "source_issue_code": "timeline-order-conflict",
+                    "source_patch_suggestion_ids": [],
+                    "missing_fields": [],
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "resolves_blocked_gate": True,
+                    "resolves_issue_codes": ["timeline-order-conflict"],
+                    "warnings": [],
+                    "review_tokens": [],
+                    "apply_args": {
+                        "event_id": "event-001",
+                        "reading_chapter": 3,
+                        "location": "白塔",
+                    },
+                },
+                {
+                    "id": "timeline-merge-002",
+                    "kind": "timeline-merge-input",
+                    "strategy": "update-existing-event",
+                    "summary": "更新事件",
+                    "target_files": ["timeline/events.json"],
+                    "source_issue_code": "location-continuity-conflict",
+                    "source_patch_suggestion_ids": [],
+                    "missing_fields": [],
+                    "can_apply_directly": True,
+                    "requires_override": False,
+                    "resolves_blocked_gate": True,
+                    "resolves_issue_codes": ["location-continuity-conflict"],
+                    "warnings": [],
+                    "review_tokens": [],
+                    "apply_args": {
+                        "event_id": "event-001",
+                        "reading_chapter": 3,
+                        "location": "白塔议事厅",
+                    },
+                },
+            ]
+        )
+        self.assertEqual(len(merged), 1)
+        self.assertIn("dedupe-apply-args-conflict:location", merged[0]["warnings"])
+
+    def test_reuse_review_missing_fields_remaining_item_reroutes_to_repair_intake(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            write_json(
+                workspace / "timeline/events.json",
+                {
+                    "events": [
+                        {
+                            "id": "event-faction-truth-a",
+                            "label": "白塔夜审",
+                            "chronological_index": 7,
+                            "reading_chapter": 7,
+                            "participants": ["char-protagonist"],
+                            "location": "白塔",
+                            "notes": "林舟在白塔第一次意识到议会和黑潮并非同一阵营。",
+                        },
+                        {
+                            "id": "event-faction-truth-b",
+                            "label": "白塔夜审",
+                            "chronological_index": 8,
+                            "reading_chapter": 8,
+                            "participants": ["char-protagonist"],
+                            "location": "白塔议事厅",
+                            "notes": "林舟在白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+                        },
+                    ]
+                },
+            )
+            write_json(
+                workspace / "outline/scene-index.json",
+                {
+                    "chapters": [
+                        {
+                            "chapter": 7,
+                            "title": "第七章",
+                            "summary": "",
+                            "scenes": [
+                                {
+                                    "id": "scene-faction-truth",
+                                    "title": "白塔夜审",
+                                    "pov": "林舟",
+                                    "status": "planned",
+                                    "characters": ["char-protagonist"],
+                                    "event_ids": ["event-faction-truth-a", "event-faction-truth-b"],
+                                    "notes": "林舟在白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+            result = ingest_idea(
+                workspace,
+                title="白塔夜审",
+                content="林舟在第三章白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+                kind="scene",
+            )
+            idea_id = result["idea"]["id"]
+            check_idea_consistency(workspace, idea_id)
+            review = review_reuse(workspace, idea_id)
+            report_path = Path(review["report_path"])
+            persisted = read_json(report_path, {})
+            persisted["remaining_review_merge_inputs"].append(
+                {
+                    "id": "timeline-merge-999",
+                    "strategy": "create-event-and-scene",
+                    "summary": "默认输入仍缺字段",
+                    "target_files": ["timeline/events.json"],
+                    "can_apply_directly": False,
+                    "missing_fields": ["participant_ids"],
+                    "warnings": [],
+                    "review_tokens": [],
+                    "remaining_kind": "missing-fields",
+                    "remaining_summary": "仍待补齐字段：participant_ids",
+                }
+            )
+            write_json(report_path, persisted)
+
+            status = collect_workspace_status(workspace)
+            self.assertIn("intake / merge 缺口", status["recommended_next_step"])
+            self.assertIn("participant_ids", status["recommended_next_step"])
+
+            pipeline = run_outline_workspace_pipeline(workspace)
+            self.assertEqual(pipeline["recommended_action"], "repair-intake")
+            self.assertEqual(pipeline["idea_id"], idea_id)
+            self.assertIn("先补 intake", pipeline["reason"])
 
     def test_reuse_review_decision_can_advance_review_path_to_apply(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4843,9 +5619,14 @@ class WorkspaceTests(unittest.TestCase):
             idea_id = result["idea"]["id"]
             check_idea_consistency(workspace, idea_id)
             review = review_reuse(workspace, idea_id)
+            target_ready_input = next(
+                item
+                for item in review["ready_merge_inputs"]
+                if item["strategy"] == "update-existing-event"
+                and "event-faction-truth-b" in item["summary"]
+            )
             ready_input_ids = [item["id"] for item in review["ready_merge_inputs"]]
             self.assertTrue(ready_input_ids)
-            self.assertIn("timeline-merge-003", ready_input_ids)
             review_input_ids = [item["id"] for item in review["review_merge_inputs"]]
             self.assertEqual(len(review_input_ids), 1)
             self.assertTrue(review_input_ids[0].startswith("timeline-merge-"))
@@ -4854,20 +5635,28 @@ class WorkspaceTests(unittest.TestCase):
                 review_input_ids,
             )
             self.assertIn("reuse-ambiguity-linked-events", review["review_tokens"])
+            self.assertEqual(
+                {item["id"]: item["remaining_kind"] for item in review["remaining_review_merge_inputs"]},
+                {review_input_ids[0]: "reuse-ambiguity"},
+            )
 
             decided = record_reuse_review_decision(
                 workspace,
                 idea_id,
-                selected_merge_input_ids=["timeline-merge-003"],
+                selected_merge_input_ids=[target_ready_input["id"]],
                 resolution_note="复核后先放行 event 更新时间线，scene 的 event 关联歧义后续单独处理。",
             )
             self.assertEqual(decided["decision"]["status"], "approved-ready-merge-inputs")
             self.assertTrue(decided["decision"]["apply_ready"])
             self.assertTrue(decided["decision"]["merge_plan_fingerprint"])
-            self.assertEqual(decided["decision"]["selected_merge_input_ids"], ["timeline-merge-003"])
+            self.assertEqual(decided["decision"]["selected_merge_input_ids"], [target_ready_input["id"]])
             self.assertEqual(
                 decided["decision"]["remaining_review_merge_input_ids"],
                 review_input_ids,
+            )
+            self.assertEqual(
+                {item["id"]: item["remaining_kind"] for item in decided["decision"]["remaining_review_merge_inputs"]},
+                {review_input_ids[0]: "reuse-ambiguity"},
             )
 
             report_path = Path(decided["report_path"])
@@ -4879,14 +5668,16 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(pipeline["recommended_action"], "apply-merge")
             self.assertEqual(pipeline["idea_id"], idea_id)
             self.assertIn("reuse review", pipeline["reason"])
-            self.assertIn("已确认", collect_workspace_status(workspace)["recommended_next_step"])
+            status_after_decision = collect_workspace_status(workspace)
+            self.assertIn("已确认", status_after_decision["recommended_next_step"])
+            self.assertIn("仍待确认 reuse 歧义", status_after_decision["recommended_next_step"])
 
             applied = run_outline_workspace_pipeline(workspace, action="apply-merge", execute=True, idea_id=idea_id)
             self.assertTrue(applied["executed"])
             self.assertEqual(applied["merge_result"]["idea"]["status"], "applied")
             self.assertEqual(
                 applied["merge_result"]["idea"]["applied_merge_input_ids"],
-                ["timeline-merge-003"],
+                [target_ready_input["id"]],
             )
             self.assertEqual(
                 applied["merge_result"]["idea"]["resolution_note"],
@@ -4900,6 +5691,10 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(
                 [item["id"] for item in applied["reuse_review"]["remaining_review_merge_inputs"]],
                 review_input_ids,
+            )
+            self.assertEqual(
+                {item["id"]: item["remaining_kind"] for item in applied["reuse_review"]["remaining_review_merge_inputs"]},
+                {review_input_ids[0]: "reuse-ambiguity"},
             )
             self.assertEqual(applied["reuse_review"]["ready_merge_inputs"], [])
             self.assertEqual(applied["reuse_review"]["blocked_merge_inputs"], [])
@@ -4920,6 +5715,214 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(moved_event["chronological_index"], 3)
             report = validate_workspace(workspace)
             self.assertTrue(report["ok"])
+
+    def test_reuse_review_decision_expires_after_merge_plan_fingerprint_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            write_json(
+                workspace / "timeline/events.json",
+                {
+                    "events": [
+                        {
+                            "id": "event-faction-truth-a",
+                            "label": "白塔夜审",
+                            "chronological_index": 7,
+                            "reading_chapter": 7,
+                            "participants": ["char-protagonist"],
+                            "location": "白塔",
+                            "notes": "林舟在白塔第一次意识到议会和黑潮并非同一阵营。",
+                        },
+                        {
+                            "id": "event-faction-truth-b",
+                            "label": "白塔夜审",
+                            "chronological_index": 8,
+                            "reading_chapter": 8,
+                            "participants": ["char-protagonist"],
+                            "location": "白塔议事厅",
+                            "notes": "林舟在白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+                        },
+                    ]
+                },
+            )
+            write_json(
+                workspace / "outline/scene-index.json",
+                {
+                    "chapters": [
+                        {
+                            "chapter": 7,
+                            "title": "第七章",
+                            "summary": "",
+                            "scenes": [
+                                {
+                                    "id": "scene-faction-truth",
+                                    "title": "白塔夜审",
+                                    "pov": "林舟",
+                                    "status": "planned",
+                                    "characters": ["char-protagonist"],
+                                    "event_ids": ["event-faction-truth-a", "event-faction-truth-b"],
+                                    "notes": "林舟在白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+            result = ingest_idea(
+                workspace,
+                title="白塔夜审",
+                content="林舟在第三章白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+                kind="scene",
+            )
+            idea_id = result["idea"]["id"]
+            check_idea_consistency(workspace, idea_id)
+
+            review = review_reuse(workspace, idea_id)
+            target_ready_input = next(
+                item
+                for item in review["ready_merge_inputs"]
+                if item.get("strategy") == "update-existing-event"
+                and "event-faction-truth-b" in str(item.get("summary") or "")
+            )
+
+            decided = record_reuse_review_decision(
+                workspace,
+                idea_id,
+                selected_merge_input_ids=[target_ready_input["id"]],
+                resolution_note="先消费 ready event 更新。",
+            )
+            self.assertTrue(decided["decision"]["apply_ready"])
+            fingerprint_before = decided["decision"]["merge_plan_fingerprint"]
+
+            updated_scene_index = read_json(workspace / "outline/scene-index.json", {})
+            updated_scene_index["chapters"][0]["scenes"][0]["event_ids"] = ["event-faction-truth-b"]
+            write_json(workspace / "outline/scene-index.json", updated_scene_index)
+
+            refreshed_review = review_reuse(workspace, idea_id)
+            self.assertFalse(refreshed_review["decision"]["apply_ready"])
+            self.assertEqual(
+                refreshed_review["decision"]["merge_plan_fingerprint"],
+                fingerprint_before,
+            )
+            self.assertEqual(
+                refreshed_review["decision"]["selected_merge_input_ids"],
+                [target_ready_input["id"]],
+            )
+
+    def test_review_reuse_cli_prints_ready_and_remaining_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            write_json(
+                workspace / "timeline/events.json",
+                {
+                    "events": [
+                        {
+                            "id": "event-faction-truth-a",
+                            "label": "白塔夜审",
+                            "chronological_index": 7,
+                            "reading_chapter": 7,
+                            "participants": ["char-protagonist"],
+                            "location": "白塔",
+                            "notes": "林舟在白塔第一次意识到议会和黑潮并非同一阵营。",
+                        },
+                        {
+                            "id": "event-faction-truth-b",
+                            "label": "白塔夜审",
+                            "chronological_index": 8,
+                            "reading_chapter": 8,
+                            "participants": ["char-protagonist"],
+                            "location": "白塔议事厅",
+                            "notes": "林舟在白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+                        },
+                    ]
+                },
+            )
+            write_json(
+                workspace / "outline/scene-index.json",
+                {
+                    "chapters": [
+                        {
+                            "chapter": 7,
+                            "title": "第七章",
+                            "summary": "",
+                            "scenes": [
+                                {
+                                    "id": "scene-faction-truth",
+                                    "title": "白塔夜审",
+                                    "pov": "林舟",
+                                    "status": "planned",
+                                    "characters": ["char-protagonist"],
+                                    "event_ids": ["event-faction-truth-a", "event-faction-truth-b"],
+                                    "notes": "林舟在白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+            result = ingest_idea(
+                workspace,
+                title="白塔夜审",
+                content="林舟在第三章白塔议事厅第一次意识到议会和黑潮并非同一阵营。",
+                kind="scene",
+            )
+            idea_id = result["idea"]["id"]
+            check_idea_consistency(workspace, idea_id)
+
+            command = [
+                sys.executable,
+                "scripts/review_reuse.py",
+                "--workspace",
+                str(workspace),
+                "--idea-id",
+                idea_id,
+            ]
+            completed = subprocess.run(
+                command,
+                cwd=REPO_ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn("Ready merge inputs:", completed.stdout)
+            self.assertIn("Remaining review inputs:", completed.stdout)
+            self.assertIn("更新 `event-faction-truth-b`", completed.stdout)
+            self.assertIn("[reuse-ambiguity]", completed.stdout)
+
+    def test_reuse_review_remaining_input_snapshots_classify_ambiguity_and_missing_fields(self) -> None:
+        review_inputs = [
+            {
+                "id": "timeline-merge-004",
+                "strategy": "update-existing-scene",
+                "summary": "scene reuse 歧义",
+                "target_files": ["outline/scene-index.json"],
+                "can_apply_directly": False,
+                "missing_fields": ["scene_event_ids"],
+                "warnings": ["场景需要人工确认旧 event 关联。"],
+                "review_tokens": ["reuse-ambiguity-linked-events"],
+            }
+        ]
+        blocked_inputs = [
+            {
+                "id": "timeline-merge-005",
+                "strategy": "create-event-and-scene",
+                "summary": "默认 timeline 输入还缺字段",
+                "target_files": ["timeline/events.json", "outline/scene-index.json"],
+                "can_apply_directly": False,
+                "missing_fields": ["participant_ids", "reading_chapter"],
+                "warnings": [],
+                "review_tokens": [],
+            }
+        ]
+
+        remaining = _remaining_review_input_snapshots(_combined_remaining_review_inputs(review_inputs, blocked_inputs))
+        remaining_by_id = {item["id"]: item for item in remaining}
+        self.assertEqual(remaining_by_id["timeline-merge-004"]["remaining_kind"], "reuse-ambiguity")
+        self.assertIn("reuse-ambiguity-linked-events", remaining_by_id["timeline-merge-004"]["remaining_summary"])
+        self.assertEqual(remaining_by_id["timeline-merge-005"]["remaining_kind"], "missing-fields")
+        self.assertIn("participant_ids", remaining_by_id["timeline-merge-005"]["remaining_summary"])
+        self.assertIn("reading_chapter", remaining_by_id["timeline-merge-005"]["remaining_summary"])
 
     def test_reuse_review_decision_can_reject_review_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5023,6 +6026,121 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(status["idea_counts"]["rejected"], 1)
             pipeline = run_outline_workspace_pipeline(workspace)
             self.assertEqual(pipeline["recommended_action"], "validate")
+
+    def test_review_reuse_backfills_remaining_inputs_for_legacy_applied_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            idea_log = read_json(workspace / "state/idea-log.json", {"ideas": []})
+            idea_log["ideas"].append(
+                {
+                    "id": "idea-legacy",
+                    "title": "档案夜审",
+                    "kind": "scene",
+                    "status": "applied",
+                    "source": "manual",
+                    "content": "旧样例。",
+                    "tags": [],
+                    "target_files": ["timeline/events.json"],
+                    "created_at": "2026-07-05T03:36:00Z",
+                    "updated_at": "2026-07-05T03:36:16Z",
+                    "resolution_note": "先放行旧 event，scene 歧义后续再处理。",
+                    "applied_merge_input_ids": ["timeline-merge-003"],
+                }
+            )
+            write_json(workspace / "state/idea-log.json", idea_log)
+            write_json(
+                workspace / "state/merge-plans/idea-legacy.json",
+                {
+                    "idea_id": "idea-legacy",
+                    "created_at": "2026-07-05T03:36:15Z",
+                    "timeline_merge_inputs": [
+                        {
+                            "id": "timeline-merge-003",
+                            "strategy": "update-existing-event",
+                            "summary": "更新旧 event。",
+                            "target_files": ["timeline/events.json"],
+                            "can_apply_directly": False,
+                            "missing_fields": [],
+                            "warnings": [],
+                            "review_tokens": [],
+                        },
+                        {
+                            "id": "timeline-merge-004",
+                            "strategy": "update-existing-scene",
+                            "summary": "scene reuse 歧义。",
+                            "target_files": ["outline/scene-index.json"],
+                            "can_apply_directly": False,
+                            "missing_fields": ["scene_event_ids"],
+                            "warnings": ["场景需要人工确认旧 event 关联。"],
+                            "review_tokens": ["reuse-ambiguity-linked-events"],
+                        },
+                    ],
+                },
+            )
+            write_json(
+                workspace / "state/reuse-reviews/idea-legacy.json",
+                {
+                    "idea_id": "idea-legacy",
+                    "title": "档案夜审",
+                    "status": "applied",
+                    "review_required": False,
+                    "review_state": "applied",
+                    "review_status_summary": "旧归档。",
+                    "review_summary": "当前 merge plan 含有 reuse 歧义，需要先人工确认事件/场景关联对象。",
+                    "review_tokens": ["reuse-ambiguity-linked-events"],
+                    "review_checklist": [],
+                    "review_merge_inputs": [],
+                    "ready_merge_inputs": [],
+                    "blocked_merge_inputs": [],
+                    "action_matrix": [],
+                    "consistency_gate": {"status": "consumed"},
+                    "merge_plan_path": str((workspace / "state/merge-plans/idea-legacy.json").resolve()),
+                    "merge_plan_view_path": str((workspace / "views/merge-plans/idea-legacy.html").resolve()),
+                    "created_at": "2026-07-05T03:36:16Z",
+                    "decision": {
+                        "status": "approved-ready-merge-inputs",
+                        "summary": "已确认先消费 ready merge inputs：timeline-merge-003。",
+                        "resolution_note": "先放行旧 event，scene 歧义后续再处理。",
+                        "selected_merge_input_ids": ["timeline-merge-003"],
+                        "selected_merge_inputs": [
+                            {
+                                "id": "timeline-merge-003",
+                                "strategy": "update-existing-event",
+                                "summary": "更新旧 event。",
+                                "target_files": ["timeline/events.json"],
+                                "can_apply_directly": False,
+                                "missing_fields": [],
+                                "warnings": [],
+                                "review_tokens": [],
+                            }
+                        ],
+                        "apply_ready": False,
+                        "merge_plan_created_at": "2026-07-05T03:36:15Z",
+                        "merge_plan_fingerprint": "legacy-fingerprint",
+                        "decided_at": "2026-07-05T03:36:15Z",
+                        "applied": True,
+                        "applied_at": "2026-07-05T03:36:16Z",
+                        "applied_merge_input_ids": ["timeline-merge-003"],
+                    },
+                    "applied_result": {
+                        "status": "applied",
+                        "resolution_note": "先放行旧 event，scene 歧义后续再处理。",
+                        "applied_merge_input_ids": ["timeline-merge-003"],
+                        "updated_files": ["timeline/events.json"],
+                        "validation_ok": True,
+                        "validation_report_path": "",
+                        "validated_at": "2026-07-05T03:36:16Z",
+                        "applied_at": "2026-07-05T03:36:16Z",
+                    },
+                },
+            )
+
+            refreshed = review_reuse(workspace, "idea-legacy")
+            remaining = refreshed["remaining_review_merge_inputs"]
+            self.assertEqual([item["id"] for item in remaining], ["timeline-merge-004"])
+            self.assertEqual(remaining[0]["remaining_kind"], "reuse-ambiguity")
+            self.assertIn("reuse-ambiguity-linked-events", remaining[0]["remaining_summary"])
 
     def test_mixed_subject_local_signal_review_path_keeps_participants_from_timeline_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5670,6 +6788,87 @@ class WorkspaceTests(unittest.TestCase):
             self.assertTrue(any(issue["details"]["record_id"] == "event-reveal-expanded" for issue in knowledge_issues))
             self.assertTrue(any(issue["details"]["record_id"] == "scene-reveal-expanded" for issue in knowledge_issues))
             self.assertTrue(any(issue["details"]["record_id"] == "event-reveal-expanded" for issue in location_issues))
+
+    def test_merge_plan_merges_multiple_issues_for_same_event_into_one_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "demo"
+            init_workspace(workspace, "测试小说", "林舟")
+            canon_index = read_json(workspace / "state/canon-index.json", {})
+            canon_index["characters"].append(
+                {
+                    "id": "char-sulan",
+                    "name": "苏岚",
+                    "aliases": [],
+                    "role": "deuteragonist",
+                    "status": "alive",
+                    "death_event_id": None,
+                }
+            )
+            write_json(workspace / "state/canon-index.json", canon_index)
+            write_json(
+                workspace / "timeline/events.json",
+                {
+                    "events": [
+                        {
+                            "id": "event-reveal-expanded",
+                            "label": "苏岚提前知道真相（白塔议事厅）",
+                            "chronological_index": 7,
+                            "reading_chapter": 7,
+                            "participants": ["char-sulan"],
+                            "location": "白塔",
+                            "notes": "",
+                        }
+                    ]
+                },
+            )
+            write_json(
+                workspace / "outline/scene-index.json",
+                {
+                    "chapters": [
+                        {
+                            "chapter": 7,
+                            "title": "第七章",
+                            "summary": "",
+                            "scenes": [
+                                {
+                                    "id": "scene-reveal-expanded",
+                                    "title": "苏岚提前知道真相·白塔夜审",
+                                    "pov": "苏岚",
+                                    "status": "planned",
+                                    "characters": ["char-sulan"],
+                                    "event_ids": ["event-reveal-expanded"],
+                                    "notes": "",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+
+            result = ingest_idea(
+                workspace,
+                title="苏岚提前知道真相",
+                content="苏岚在第三章白塔议事厅就知道组织首领身份。",
+                kind="reveal",
+            )
+            idea_id = result["idea"]["id"]
+            report = check_idea_consistency(workspace, idea_id)
+            self.assertIn("knowledge-state-conflict", {issue["code"] for issue in report["issues"]})
+            self.assertIn("location-continuity-conflict", {issue["code"] for issue in report["issues"]})
+
+            plan = plan_idea_merge(workspace, idea_id)
+            event_inputs = [
+                item
+                for item in plan["timeline_merge_inputs"]
+                if item["strategy"] == "update-existing-event"
+                and item.get("apply_args", {}).get("event_id") == "event-reveal-expanded"
+            ]
+            self.assertEqual(len(event_inputs), 1)
+            event_input = event_inputs[0]
+            self.assertEqual(event_input["apply_args"]["reading_chapter"], 3)
+            self.assertEqual(event_input["apply_args"]["location"], "白塔议事厅")
+            suggestion_ids = set(event_input["source_patch_suggestion_ids"])
+            self.assertGreaterEqual(len(suggestion_ids), 2)
 
     def test_consistency_check_detects_knowledge_state_conflict_without_title_match(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

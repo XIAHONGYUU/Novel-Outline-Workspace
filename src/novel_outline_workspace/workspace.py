@@ -256,6 +256,55 @@ def _format_missing_field_labels(fields: list[str]) -> str:
     return "、".join(labels[:3]) + " 等信息"
 
 
+def _reuse_remaining_summaries(report: dict[str, Any]) -> list[str]:
+    summaries: list[str] = []
+    for item in report.get("remaining_review_merge_inputs", []):
+        if not isinstance(item, dict):
+            continue
+        summary = str(item.get("remaining_summary") or "").strip()
+        if summary and summary not in summaries:
+            summaries.append(summary)
+    return summaries
+
+
+def _reuse_remaining_summaries_for_kind(report: dict[str, Any], remaining_kind: str) -> list[str]:
+    summaries: list[str] = []
+    for item in report.get("remaining_review_merge_inputs", []):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("remaining_kind") or "").strip() != remaining_kind:
+            continue
+        summary = str(item.get("remaining_summary") or "").strip()
+        if summary and summary not in summaries:
+            summaries.append(summary)
+    return summaries
+
+
+def _plan_reuse_remaining_summaries(plan: dict[str, Any]) -> list[str]:
+    summaries: list[str] = []
+    for item in plan.get("timeline_merge_inputs", []):
+        if not isinstance(item, dict):
+            continue
+        review_tokens = [str(token).strip() for token in item.get("review_tokens", []) if str(token).strip()]
+        if not any(token.startswith("reuse-ambiguity-") for token in review_tokens):
+            continue
+        summary = f"仍待确认 reuse 歧义：{', '.join(review_tokens)}"
+        if summary not in summaries:
+            summaries.append(summary)
+    return summaries
+
+
+def _reuse_remaining_kinds(report: dict[str, Any]) -> list[str]:
+    kinds: list[str] = []
+    for item in report.get("remaining_review_merge_inputs", []):
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("remaining_kind") or "").strip()
+        if kind and kind not in kinds:
+            kinds.append(kind)
+    return kinds
+
+
 def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict[str, Any]:
     idea_id = str(idea.get("id") or "").strip()
     report_path = _consistency_report_path(workspace, idea_id)
@@ -272,6 +321,9 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
             "constraints_review_policy_summary": "",
             "reuse_review_summary": "",
             "reuse_review_tokens": [],
+            "reuse_review_remaining_summaries": [],
+            "reuse_review_missing_field_summaries": [],
+            "reuse_review_remaining_kinds": [],
             "warning_codes": [],
             "open_questions": [],
             "missing_fields": [],
@@ -291,6 +343,9 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
             "constraints_review_policy_summary": "",
             "reuse_review_summary": "",
             "reuse_review_tokens": [],
+            "reuse_review_remaining_summaries": [],
+            "reuse_review_missing_field_summaries": [],
+            "reuse_review_remaining_kinds": [],
             "warning_codes": [],
             "open_questions": [],
             "missing_fields": [],
@@ -326,6 +381,9 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
             "constraints_review_policy_summary": "",
             "reuse_review_summary": "",
             "reuse_review_tokens": [],
+            "reuse_review_remaining_summaries": [],
+            "reuse_review_missing_field_summaries": [],
+            "reuse_review_remaining_kinds": [],
             "warning_codes": warning_codes,
             "open_questions": open_questions,
             "missing_fields": [],
@@ -346,6 +404,9 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
             "constraints_review_policy_summary": "",
             "reuse_review_summary": "",
             "reuse_review_tokens": [],
+            "reuse_review_remaining_summaries": [],
+            "reuse_review_missing_field_summaries": [],
+            "reuse_review_remaining_kinds": [],
             "warning_codes": warning_codes,
             "open_questions": open_questions,
             "missing_fields": [],
@@ -404,6 +465,10 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
     needs_constraints_review = False
     reuse_review_summary = ""
     reuse_review_tokens: list[str] = []
+    reuse_review_remaining_summaries = _reuse_remaining_summaries(reuse_review_report) or _plan_reuse_remaining_summaries(plan)
+    reuse_review_missing_field_summaries = _reuse_remaining_summaries_for_kind(reuse_review_report, "missing-fields")
+    reuse_review_remaining_kinds = _reuse_remaining_kinds(reuse_review_report)
+    reuse_review_missing_fields = "missing-fields" in reuse_review_remaining_kinds
     needs_reuse_review = False
     for action in plan.get("proposed_actions", []):
         if str(action.get("domain") or "").strip() != "constraints":
@@ -429,21 +494,30 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
         ]
         break
 
+    default_needs_intake_repair = bool(
+        open_questions
+        or set(warning_codes) & INTAKE_REPAIR_WARNING_CODES
+        or (missing_fields and not needs_reuse_review)
+    )
+
     return {
         "idea_id": idea_id,
         "report_status": "fresh",
         "plan_status": "fresh",
         "has_conflicts": has_conflicts,
-        "needs_intake_repair": False if review_decision_apply_ready or reuse_review_apply_ready or needs_constraints_review or needs_reuse_review else bool(
-            missing_fields or open_questions or set(warning_codes) & INTAKE_REPAIR_WARNING_CODES
+        "needs_intake_repair": False if review_decision_apply_ready or reuse_review_apply_ready or needs_constraints_review else bool(
+            default_needs_intake_repair or reuse_review_missing_fields
         ),
         "needs_constraints_review": False if review_decision_apply_ready or reuse_review_apply_ready else needs_constraints_review,
-        "needs_reuse_review": False if review_decision_apply_ready or reuse_review_apply_ready else needs_reuse_review,
+        "needs_reuse_review": False if review_decision_apply_ready or reuse_review_apply_ready or reuse_review_missing_fields else needs_reuse_review,
         "constraints_review_summary": constraints_review_summary,
         "constraints_review_policy": constraints_review_policy,
         "constraints_review_policy_summary": constraints_review_policy_summary,
         "reuse_review_summary": reuse_review_summary,
         "reuse_review_tokens": reuse_review_tokens,
+        "reuse_review_remaining_summaries": reuse_review_remaining_summaries,
+        "reuse_review_missing_field_summaries": reuse_review_missing_field_summaries,
+        "reuse_review_remaining_kinds": reuse_review_remaining_kinds,
         "constraints_review_decision_status": str(review_decision.get("status") or "").strip(),
         "constraints_review_decision_summary": str(review_decision.get("summary") or "").strip(),
         "constraints_review_resolution_note": str(review_decision.get("resolution_note") or "").strip(),
@@ -463,6 +537,21 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
 def describe_pending_idea_next_step(workspace: Path, idea: dict[str, Any]) -> str:
     progress = inspect_pending_idea_progress(workspace, idea)
     title = str(idea.get("title") or progress.get("idea_id") or "pending idea")
+    reuse_remaining_summaries = [
+        str(item).strip()
+        for item in progress.get("reuse_review_remaining_summaries", [])
+        if str(item).strip()
+    ]
+    reuse_missing_field_summaries = [
+        str(item).strip()
+        for item in progress.get("reuse_review_missing_field_summaries", [])
+        if str(item).strip()
+    ]
+    reuse_remaining_kinds = {
+        str(item).strip()
+        for item in progress.get("reuse_review_remaining_kinds", [])
+        if str(item).strip()
+    }
 
     if progress["report_status"] == "missing":
         return f"先为 `{title}` 运行 consistency check，再决定如何 merge。"
@@ -477,10 +566,17 @@ def describe_pending_idea_next_step(workspace: Path, idea: dict[str, Any]) -> st
         return f"基于 `{title}` 已确认的 constraints review 结论，直接 apply 已批准的 merge inputs。"
     if progress.get("reuse_review_apply_ready"):
         decision_summary = str(progress.get("reuse_review_decision_summary") or "").strip()
+        remaining_summary = reuse_remaining_summaries[0] if reuse_remaining_summaries else ""
         if decision_summary:
+            if remaining_summary:
+                return f"基于 `{title}` 已确认的 reuse review 结论，直接 apply 已批准的 merge inputs。{decision_summary}{remaining_summary}"
             return f"基于 `{title}` 已确认的 reuse review 结论，直接 apply 已批准的 merge inputs。{decision_summary}"
+        if remaining_summary:
+            return f"基于 `{title}` 已确认的 reuse review 结论，直接 apply 已批准的 merge inputs。{remaining_summary}"
         return f"基于 `{title}` 已确认的 reuse review 结论，直接 apply 已批准的 merge inputs。"
     if progress["needs_intake_repair"]:
+        if "missing-fields" in reuse_remaining_kinds and reuse_missing_field_summaries:
+            return f"先补 `{title}` 的 intake / merge 缺口，再继续 reuse review。{reuse_missing_field_summaries[0]}"
         if progress["missing_fields"]:
             return f"先补 `{title}` 的 { _format_missing_field_labels(progress['missing_fields']) }，再继续 apply merge。"
         if progress["open_questions"]:
@@ -496,8 +592,13 @@ def describe_pending_idea_next_step(workspace: Path, idea: dict[str, Any]) -> st
         return f"先复核 `{title}` 的 world-rule / exception 主体范围，再决定如何 merge。"
     if progress.get("needs_reuse_review"):
         summary = str(progress.get("reuse_review_summary") or "").strip()
+        remaining_summary = reuse_remaining_summaries[0] if reuse_remaining_summaries else ""
         if summary:
+            if remaining_summary:
+                return f"先复核 `{title}` 的 event / scene reuse 歧义。{summary}{remaining_summary}"
             return f"先复核 `{title}` 的 event / scene reuse 歧义。{summary}"
+        if remaining_summary:
+            return f"先复核 `{title}` 的 event / scene reuse 歧义。{remaining_summary}"
         return f"先复核 `{title}` 的 event / scene reuse 歧义，再决定如何 merge。"
     if progress["has_conflicts"]:
         return f"优先处理 `{title}` 的 merge plan，用结构化 merge inputs 消解当前 consistency 冲突。"
@@ -1045,6 +1146,7 @@ def _render_status_html(workspace: Path, status: dict[str, Any]) -> str:
         <div class="list-row">
           <strong>{_safe(idea.get('title'))}</strong>
           <div>{_safe(idea.get('content', ''))}</div>
+          <div class="submetric">{_safe(describe_pending_idea_next_step(workspace, idea))}</div>
           <div class="meta">
             <span class="badge warning">{_safe(idea.get('kind'))}</span>
             <code>{_safe(idea.get('id'))}</code>

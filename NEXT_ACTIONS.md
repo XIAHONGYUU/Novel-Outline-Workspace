@@ -1,6 +1,6 @@
 # Next Actions
 
-最后更新：2026-07-05
+最后更新：2026-07-28
 
 ## 现在优先做什么
 
@@ -28,20 +28,38 @@
    - `update-existing-scene` 当前已开始清掉与 draft 标题 / 地点不兼容的旧 `event_ids`，避免 scene reuse 单独 apply 时写出 stale 或悬空事件关联
    - `update-existing-scene` 当前在已命中 linked event 且 draft 没给新角色信息时，会优先向 event participants 对齐 `scene_pov / scene_character_ids`
    - `update-existing-event` 当前在已命中 linked scene 且 draft 没给新角色信息时，也会优先向 scene `characters` 对齐 `participant_ids`
+   - `update-existing-event / update-existing-scene` 当前在旧 `label / title` 为空时，也会优先回填 draft 标题，不再继续暴露假性 `missing_fields`
+   - `update-existing-event` 当前在旧 `location` 为空时，也会优先回填 draft 地点，不再继续保留空地点残留
+   - `update-existing-scene` 当前在旧 `pov` 为空、但旧 `characters` 仍稳定时，也会优先回填 POV，不再继续保留空视角残留
+   - `update-existing-scene` 当前在匹配 linked event 时，也会优先使用新 draft 的 `scene_title`，不再让旧标题压过新的关联信号
+   - `update-existing-event` 当前在 linked scene 标题过时、但 `event_id` 直连仍稳定时，也会优先回收这条 scene 的 `characters`，不再被旧标题挡掉
+   - `update-existing-scene` 当前在旧 event 标题过时、但 `event_id` 直连仍稳定时，也会优先保住这条 `event_ids` 关联，不再被旧标题挡掉
+   - 上述标题优先 / 直连回退 / 空值回填逻辑当前已开始收敛到共享 helper；其中 `event participants` / `scene event_ids` 两条复用决策已拆成独立 resolver，后续优先继续做策略层收口，不再主要靠局部 if 补边角
    - linked scene / linked event 证据如果不唯一，planner 现在会显式保守：scene 不再继续保留歧义 `event_ids`，event 不再静默沿用旧 participants
    - 上述歧义 case 现在还会显式写出 warning，并进入 `unresolved_questions`，不再只靠空字段间接暴露
    - 上述歧义 case 现在还会产出结构化 `review_tokens`，并新增独立 `review` action 作为正式复核入口
    - `review_reuse.py` 现已把这条入口正式落成 `state/reuse-reviews/<idea-id>.json`
    - pipeline `auto` 现已能在有最新 consistency report 的前提下继续走到 `plan-merge -> review-reuse`，而不再被 `check-consistency` 原地卡住
+   - `remaining_review_merge_inputs` 当前已开始同时保留 reuse 歧义项与缺字段 blocked 项，不再只剩 scene / event 歧义
+   - 每条 remaining input 当前也会显式带 `remaining_kind / remaining_summary`，方便归档后继续区分“纯歧义待定”与“字段缺失待补”
+   - `workspace-status` 与 `recommended_next_step` 当前也已开始消费这层 remaining 类型：显式 `missing-fields` 会优先收敛到 `repair-intake`，纯 `reuse-ambiguity` 则继续停在 `review-reuse`
+   - `scripts/review_reuse.py` 的非 JSON 输出当前也已开始直接列出 `ready / remaining` 输入与对应 `remaining_kind`
+   - 历史 `applied` reuse review 在缺少 `remaining_review_merge_inputs` 时，当前也已能从旧 merge plan 自动回填，`demo-workspace/idea-20260705-001` 已重刷到这套新语义
+   - `timeline_merge_inputs` 当前也已开始在整份 plan 内统一重编号，`issue-driven + default` 混合场景下不再出现重复的 story merge input id
+   - 对同一 `event / scene record` 同时命中多条 timeline 相关 issue 的 case，planner 当前也已改成先按 record 聚合，再生成一条最终 merge input，而不再把 chapter / location 修正拆成多条半更新输入
+   - 对同一 identity 的 merge input，后置 dedupe 当前也已升级成最小语义合并：会并集 `review_tokens / resolves_issue_codes`，回填缺失 `apply_args`，并在非空 scalar 冲突时显式写出 `dedupe-apply-args-conflict:*` warning
+   - `review_reuse()` 当前也已开始在重建最新 merge plan 后重新判定旧 decision 的 `apply_ready`，plan 指纹变化后不会继续沿用过期的 ready decision
    下一步重点：
    - `review-reuse` 现已补成 deterministic writeback：
      `review_reuse.py -> resolve_reuse_review.py -> apply-merge` 已有脚本级闭环
    - `review-reuse` 现已支持第二种正式终态：
      `rejected`
    下一步重点：
-   - 检查 event / scene 复用时，是否还需要显式处理“空旧字段 vs. 新 draft 已有值”的优先级边界
-   - 检查 `timeline_merge_inputs` 在同一条 plan 里是否需要继续收紧 id 唯一性，避免复核时出现语义不同但 id 相同的输入
-   - 检查 `remaining_review_merge_inputs` 是否还需要继续细分“纯歧义待定”与“字段缺失待补”的剩余项类型
+   - 决定 pipeline / orchestrator 是否也要继续按 `remaining_kind` 细分 reason，而不只看 `needs_reuse_review / needs_intake_repair` 两个粗状态
+   - 检查 event / scene 复用 resolver 是否还要继续覆盖 `location / notes / title` 这类字段，避免主拼装函数里残留更多局部优先级判断
+   - 检查 `_dedupe_merge_inputs` 是否还需要继续从“最小语义合并”升级到“冲突可解释合并”，例如 list/dict 型 `apply_args` 冲突是否也需要显式暴露
+   - 检查同一 `record` 多 issue 聚合后，是否还需要把 `source_issue_codes` 一类聚合元数据显式写回 merge input，而不只保留单个 `source_issue_code`
+   - 判断 `remaining_review_merge_inputs` 是否还需要继续区分“缺字段待补”与“需复核但字段齐全”的更细剩余项类型
 
 2. 维护 `deterministic review writeback`  
    当前进展：constraints / reuse 两条 review-only 主路径都已有第一版正式闭环。  
@@ -91,6 +109,8 @@
    - 已覆盖 `plan-merge -> review-reuse` 的状态层 / orchestrator / report 产出路径
    - 已覆盖 `review-reuse -> resolve-reuse-review -> apply-merge`
    - 已覆盖 `review-reuse -> resolve-reuse-review(rejected)`
+   - 已覆盖同 identity merge input dedupe 的最小语义合并与冲突 warning
+   - 已覆盖 merge plan 指纹变化后 reuse review ready decision 的失效路径
 
 5. 收敛 skill 与 script 边界  
    目标：把确定性 `repair / merge / render` 动作继续沉到底层脚本，减少高层流程的模糊行为。

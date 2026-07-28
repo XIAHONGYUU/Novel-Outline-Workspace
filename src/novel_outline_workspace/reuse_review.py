@@ -65,6 +65,88 @@ def _merge_input_snapshot(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _remaining_input_kind(item: dict[str, Any]) -> str:
+    review_tokens = [str(field).strip() for field in item.get("review_tokens", []) if str(field).strip()]
+    if any(token.startswith("reuse-ambiguity-") for token in review_tokens):
+        return "reuse-ambiguity"
+    missing_fields = [str(field).strip() for field in item.get("missing_fields", []) if str(field).strip()]
+    if missing_fields:
+        return "missing-fields"
+    warnings = [str(field).strip() for field in item.get("warnings", []) if str(field).strip()]
+    if warnings:
+        return "needs-review"
+    return "pending"
+
+
+def _remaining_input_summary(item: dict[str, Any], remaining_kind: str) -> str:
+    if remaining_kind == "reuse-ambiguity":
+        review_tokens = [str(field).strip() for field in item.get("review_tokens", []) if str(field).strip()]
+        if review_tokens:
+            return f"仍待确认 reuse 歧义：{', '.join(review_tokens)}"
+        return "仍待确认 reuse 歧义。"
+    if remaining_kind == "missing-fields":
+        missing_fields = [str(field).strip() for field in item.get("missing_fields", []) if str(field).strip()]
+        if missing_fields:
+            return f"仍待补齐字段：{', '.join(missing_fields)}"
+        return "仍待补齐 merge 字段。"
+    if remaining_kind == "needs-review":
+        return "仍待人工复核后再决定是否继续 apply。"
+    return "当前尚未消费这条 merge input。"
+
+
+def _remaining_merge_input_snapshot(item: dict[str, Any]) -> dict[str, Any]:
+    snapshot = _merge_input_snapshot(item)
+    remaining_kind = _remaining_input_kind(snapshot)
+    snapshot["remaining_kind"] = remaining_kind
+    snapshot["remaining_summary"] = _remaining_input_summary(snapshot, remaining_kind)
+    return snapshot
+
+
+def _combined_remaining_review_inputs(
+    review_inputs: list[dict[str, Any]],
+    blocked_inputs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    combined: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for item in [*review_inputs, *blocked_inputs]:
+        item_id = str(item.get("id") or "").strip()
+        if item_id and item_id in seen_ids:
+            continue
+        if item_id:
+            seen_ids.add(item_id)
+        combined.append(item)
+    return combined
+
+
+def _backfill_remaining_review_inputs(report: dict[str, Any], decision: dict[str, Any]) -> list[dict[str, Any]]:
+    existing = [
+        item
+        for item in decision.get("remaining_review_merge_inputs", report.get("remaining_review_merge_inputs", []))
+        if isinstance(item, dict)
+    ]
+    if existing:
+        return existing
+    merge_plan_path = str(report.get("merge_plan_path") or "").strip()
+    if not merge_plan_path:
+        return []
+    plan = read_json(Path(merge_plan_path), {})
+    selected_ids = {
+        str(item).strip()
+        for item in decision.get("selected_merge_input_ids", [])
+        if str(item).strip()
+    }
+    remaining_inputs = [
+        _merge_input_snapshot(item)
+        for item in plan.get("timeline_merge_inputs", [])
+        if str(item.get("id") or "").strip() not in selected_ids
+        and (
+            any(str(token).strip().startswith("reuse-ambiguity-") for token in item.get("review_tokens", []))
+            or bool(item.get("missing_fields"))
+        )
+    ]
+    return _remaining_review_input_snapshots(remaining_inputs)
+
+
 def _review_checklist(review_tokens: list[str], review_inputs: list[dict[str, Any]]) -> list[str]:
     checklist: list[str] = []
     if "reuse-ambiguity-linked-scenes" in review_tokens:
@@ -106,7 +188,15 @@ def _selected_merge_input_snapshots(
 
 def _remaining_review_input_snapshots(review_inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
-        item
+        _remaining_merge_input_snapshot(item)
+        for item in review_inputs
+        if str(item.get("id") or "").strip()
+    ]
+
+
+def _remaining_review_input_ids(review_inputs: list[dict[str, Any]]) -> list[str]:
+    return [
+        str(item.get("id") or "").strip()
         for item in review_inputs
         if str(item.get("id") or "").strip()
     ]
@@ -131,6 +221,25 @@ def _is_apply_ready_decision(
         if str(item).strip()
     }
     return bool(selected_ids) and selected_ids.issubset(ready_ids)
+
+
+def _refresh_existing_decision(
+    decision: dict[str, Any],
+    *,
+    ready_inputs: list[dict[str, Any]],
+    merge_plan_fingerprint: str,
+) -> dict[str, Any]:
+    if not decision:
+        return {}
+    if bool(decision.get("applied")) or str(decision.get("status") or "").strip() == "rejected":
+        return dict(decision)
+    refreshed = dict(decision)
+    refreshed["apply_ready"] = _is_apply_ready_decision(
+        refreshed,
+        ready_inputs=ready_inputs,
+        merge_plan_fingerprint=merge_plan_fingerprint,
+    )
+    return refreshed
 
 
 def _decision_summary(status: str, selected_merge_input_ids: list[str], review_tokens: list[str]) -> str:
@@ -295,11 +404,7 @@ def _build_applied_reuse_review(
     )
     archived["review_checklist"] = []
     archived["review_merge_inputs"] = []
-    archived["remaining_review_merge_inputs"] = [
-        item
-        for item in decision.get("remaining_review_merge_inputs", report.get("remaining_review_merge_inputs", []))
-        if isinstance(item, dict)
-    ]
+    archived["remaining_review_merge_inputs"] = _backfill_remaining_review_inputs(report, decision)
     archived["ready_merge_inputs"] = []
     archived["blocked_merge_inputs"] = []
     archived["consistency_gate"] = _archive_consistency_gate(decision)
@@ -438,23 +543,29 @@ def review_reuse(workspace: Path, idea_id: str) -> dict[str, Any]:
         if str(item.get("id") or "").strip() not in {str(row.get("id") or "").strip() for row in ready_merge_inputs}
         and str(item.get("id") or "").strip() not in review_input_ids
     ]
+    remaining_review_inputs = _combined_remaining_review_inputs(review_inputs, blocked_merge_inputs)
     review_required = str(review_action.get("readiness") or "").strip() == "needs-review" and bool(review_tokens)
+    effective_decision = _refresh_existing_decision(
+        existing_decision,
+        ready_inputs=ready_merge_inputs,
+        merge_plan_fingerprint=compute_review_plan_fingerprint(plan),
+    )
     report = {
         "idea_id": idea_id,
         "title": plan.get("title"),
         "status": plan.get("status"),
         "review_required": review_required,
-        "review_state": _review_state(review_required, existing_decision),
+        "review_state": _review_state(review_required, effective_decision),
         "review_status_summary": _review_status_summary(
             review_required,
-            existing_decision,
+            effective_decision,
             str(review_action.get("summary") or "").strip(),
         ),
         "review_summary": str(review_action.get("summary") or "").strip(),
         "review_tokens": review_tokens,
         "review_checklist": _review_checklist(review_tokens, review_inputs),
         "review_merge_inputs": review_inputs,
-        "remaining_review_merge_inputs": review_inputs,
+        "remaining_review_merge_inputs": _remaining_review_input_snapshots(remaining_review_inputs),
         "ready_merge_inputs": ready_merge_inputs,
         "blocked_merge_inputs": blocked_merge_inputs,
         "action_matrix": [_action_snapshot(action) for action in plan.get("proposed_actions", [])],
@@ -463,8 +574,8 @@ def review_reuse(workspace: Path, idea_id: str) -> dict[str, Any]:
         "merge_plan_view_path": str(plan.get("view_path") or ""),
         "created_at": now_iso(),
     }
-    if existing_decision:
-        report["decision"] = existing_decision
+    if effective_decision:
+        report["decision"] = effective_decision
     report_path = _reuse_review_path(workspace, idea_id)
     write_json(report_path, report)
     report["report_path"] = str(report_path.resolve())
@@ -505,6 +616,7 @@ def record_reuse_review_decision(
 
     merge_plan = report.get("merge_plan", {})
     review_inputs = report.get("review_merge_inputs", [])
+    remaining_review_inputs = report.get("remaining_review_merge_inputs", [])
     decision_record = {
         "status": decision,
         "summary": _decision_summary(
@@ -516,12 +628,8 @@ def record_reuse_review_decision(
         "reviewer": str(reviewer or "").strip(),
         "selected_merge_input_ids": selected_ids,
         "selected_merge_inputs": _selected_merge_input_snapshots(ready_inputs, selected_ids),
-        "remaining_review_merge_input_ids": [
-            str(item.get("id") or "").strip()
-            for item in review_inputs
-            if str(item.get("id") or "").strip()
-        ],
-        "remaining_review_merge_inputs": _remaining_review_input_snapshots(review_inputs),
+        "remaining_review_merge_input_ids": _remaining_review_input_ids(remaining_review_inputs),
+        "remaining_review_merge_inputs": _remaining_review_input_snapshots(remaining_review_inputs),
         "apply_ready": _is_apply_ready_decision(
             {
                 "status": decision,

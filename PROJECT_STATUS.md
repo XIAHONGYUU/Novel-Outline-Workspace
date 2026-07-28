@@ -1,6 +1,6 @@
 # Project Status
 
-最后更新：2026-07-05
+最后更新：2026-07-28
 
 ## 项目定位
 
@@ -40,6 +40,11 @@
   - 未被批准的 scene reuse 歧义会继续留在 review note 中，而不是被静默并入
   - apply 后 `state/reuse-reviews/idea-20260705-001.json` 会稳定归档成 consumed history
   - apply 后未被消费的 reuse 歧义输入现在也会继续保留成结构化 `remaining_review_merge_inputs`，而不再只埋在说明文字里
+  - 同一条 reuse review 里如果同时存在“scene / event 复用歧义”和“默认 timeline 输入字段缺失”，两类剩余项现在也会一起保留在 `remaining_review_merge_inputs`
+  - 每条剩余项当前都会显式带上 `remaining_kind / remaining_summary`，区分是 `reuse-ambiguity` 还是 `missing-fields`
+  - `workspace-status` / `recommended_next_step` 现在也开始真正消费这些剩余项：纯 `reuse-ambiguity` 继续收敛到 `review-reuse`，而显式 `missing-fields` 则会改走 `repair-intake`
+  - `scripts/review_reuse.py` 的非 JSON 输出现在也会直接列出 `ready_merge_inputs` 与 `remaining_review_merge_inputs`，并显示 `remaining_kind / remaining_summary`
+  - 对历史 `applied` reuse review，如果旧 report 当时还没写出 `remaining_review_merge_inputs`，当前归档重建逻辑也会从旧 merge plan 自动回填 remaining 项，`demo-workspace/idea-20260705-001` 已重刷到这套新语义
 
 同时，timeline merge 这条主线继续保持收紧：
 
@@ -48,11 +53,30 @@
   - `白塔议事厅` 这类完整地点也不再并行带出裸 `议事厅`
 - `update-existing-event` 在 `timeline-order-conflict` 下不再只改 `reading_chapter`
 - 如果事件被确认前移或后移章节，merge input 现在也会同步重排 `chronological_index`
+- `update-existing-event / update-existing-scene` 当前在旧 `label / title` 为空、但新 draft 已有标题时，也会优先回填新标题，而不再继续把它们留成 `missing_fields`
+- `update-existing-event` 当前在旧 `location` 为空、但新 draft 已有地点时，也会优先回填 draft 地点，而不要求先额外命中一条独立 `location-continuity-conflict`
+- `update-existing-scene` 当前在旧 `pov` 为空、但 scene 自己已保留稳定 `characters` 时，也会优先从角色列表回填 POV，而不再继续保留空 POV 残留
+- `update-existing-scene` 当前在匹配 linked event 时，也会优先吃新 draft 的 `scene_title`，而不再让旧 scene 标题压过新的匹配信号
+- `update-existing-event` 当前在回收 linked scene `characters` 时，如果旧 scene 标题已经过时，但 `event_id` 直连和地点仍然稳定，也会优先沿用这条直接关联，而不再被旧标题挡掉
+- `update-existing-scene` 当前在保留旧 `event_ids` 时，如果旧 event 标题已经过时，但 `event_id` 直连和地点仍然稳定，也会优先保住这条直接关联，而不再被旧标题挡掉
+- 上述 `update-existing-*` 的标题优先 / 直连回退 / 空值回填规则，这一轮也已开始收敛到共享 helper，而不再继续散落在 event / scene 两边各写一份
+- 其中 `event participants` 与 `scene event_ids` 两条最容易继续长分支的复用决策，当前已正式拆成独立 resolver helper，后续补规则时不必再直接改主拼装函数
+- `timeline_merge_inputs` 当前也会在整份 plan 内统一重编号，`issue-driven + default` 混合场景下不再出现重复的 `timeline-merge-001`
+- 对同一 `event / scene record` 同时命中多条 timeline 相关 issue 的 case，planner 现在也会先按 `(record_type, record_id)` 聚合，再生成一条最终 merge input，而不再把 chapter / location 修正拆成多条半更新输入
+- 对同一 identity 的 merge input，后置 dedupe 当前也不再只是“选一个主项再丢次项字段”：
+  - `review_tokens / resolves_issue_codes / source_patch_suggestion_ids` 现在会显式并集
+  - `apply_args` 现在会保守回填缺失键，而不再静默吞掉另一条路径已经补齐的字段
+  - 如果两条输入在同一个非空 scalar `apply_args` 键上冲突，当前也会显式写出 `dedupe-apply-args-conflict:*` warning
+- `review_reuse()` 当前也会在重建最新 merge plan 后重新判定旧 decision 是否仍然 `apply_ready`
+- 这意味着 reuse review 不会再因为旧 decision 还留在 state 里，就在 plan 已变化后继续被误当作可直接 `apply-merge`
 - 这修掉了一条真实执行层裂缝：事件不会再出现“章节已改到第 3 章，但时间顺序仍停在旧 index”的半更新状态
 - 对应回归测试已经补齐，因此这轮推进不只是样例修补，而是正式执行层行为收紧
 - reuse review 当前也补上了两条脚本级闭环测试：
   - `review-reuse -> resolve-reuse-review -> apply-merge`
   - `review-reuse -> resolve-reuse-review(rejected)`
+  - 以及两条新的执行层回归：
+    - 同 identity merge input dedupe 不再静默丢 `apply_args / review_tokens / resolves_issue_codes`
+    - merge plan 指纹变化后，旧 reuse review decision 会失效
 
 ## 当前战略判断
 

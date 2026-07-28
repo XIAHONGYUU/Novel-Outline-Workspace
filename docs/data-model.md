@@ -235,7 +235,13 @@
 
 - `review_tokens` 当前主要用于稳定标识 `reuse-ambiguity-linked-scenes` / `reuse-ambiguity-linked-events`
 - `review_merge_inputs` 用于单独列出真正停在 reuse 复核上的那几条 merge inputs
-- `remaining_review_merge_inputs` 用于在 live review 与 archived history 里都显式保留“这轮没有被消费、仍待后续收口的 reuse 歧义输入”，避免只剩一条 resolution note
+- `remaining_review_merge_inputs` 用于在 live review 与 archived history 里都显式保留“这轮没有被消费、仍待后续收口的输入”，避免只剩一条 resolution note；
+  它当前既可能包含 reuse 歧义输入，也可能包含仍缺字段的 blocked 输入
+- `remaining_review_merge_inputs[].remaining_kind` 用于区分这条剩余输入当前为什么还没被消费；当前常见值包括：
+  - `reuse-ambiguity`
+  - `missing-fields`
+  - `needs-review`
+- `remaining_review_merge_inputs[].remaining_summary` 用于把这条剩余输入当前还缺什么直接写成一句稳定摘要，方便 review history 与后续 repair 路径继续消费
 - `review_status_summary` 用于给状态层、脚本输出和人工查看提供一句稳定摘要，区分 live review、已确认待 apply、已消费归档等不同阶段
 - `ready_merge_inputs` / `blocked_merge_inputs` 用于把“同一条 idea 里哪些输入在 reuse 歧义之外已结构完整、哪些仍缺字段”一次性摊平；
   对 `review-reuse` 来说，`ready_merge_inputs` 当前表示“复核 reuse 歧义后即可继续消费”的输入，
@@ -266,7 +272,8 @@
 - `status=approved-ready-merge-inputs` 表示这条 reuse review path 已被人工确认，可直接续到 `apply-merge`
 - `status=rejected` 表示这条 reuse review path 已被人工确认不进入 apply，并会把 idea 正式移出 pending path
 - `selected_merge_input_ids` / `selected_merge_inputs` 用于显式列出这次确认后允许消费的非歧义 merge inputs
-- `remaining_review_merge_input_ids` / `remaining_review_merge_inputs` 用于显式列出这次 decision 之后仍保留为后续待处理项的 reuse 歧义输入
+- `remaining_review_merge_input_ids` / `remaining_review_merge_inputs` 用于显式列出这次 decision 之后仍保留为后续待处理项的输入；
+  这些剩余项当前会继续带上 `remaining_kind / remaining_summary`
 - `apply_ready=true` 表示当前决策仍与最新 merge plan 对齐，pipeline 可以直接消费
 - `merge_plan_fingerprint` 用于按计划内容而不是按重跑时间判断决策是否仍对齐，避免同一条 plan 仅因重新生成就被误判失效
 - `applied=true` 表示这份 reuse review 决策已经被真正消费过，不应再继续作为 pending apply 入口
@@ -276,7 +283,7 @@
 - `review_required=false`
 - `review_checklist=[]`
 - `review_merge_inputs=[]`
-- `remaining_review_merge_inputs` 保留归档时仍未消费的 reuse 歧义输入
+- `remaining_review_merge_inputs` 保留归档时仍未消费的输入，包括 reuse 歧义与字段缺失待补项
 - `ready_merge_inputs=[]`
 - `blocked_merge_inputs=[]`
 - `consistency_gate.status=consumed` 或 `closed`
