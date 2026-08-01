@@ -5,13 +5,14 @@ from typing import Any
 
 from .consistency import check_idea_consistency, consistency_report_needs_refresh, load_consistency_report
 from .constraints_review import apply_approved_constraints_review, review_constraints
-from .merge import pending_ideas, plan_idea_merge
+from .merge import apply_idea_merge, pending_ideas, plan_idea_merge
 from .reuse_review import apply_approved_reuse_review, review_reuse
 from .workspace import (
     _format_missing_field_labels,
     backfill_intake_drafts,
     collect_workspace_status,
     inspect_pending_idea_progress,
+    is_direct_ready_merge_input,
     render_workspace_views,
     validate_workspace,
 )
@@ -19,6 +20,13 @@ from .workspace import (
 
 def _repair_intake_reason(idea: dict[str, Any], progress: dict[str, Any]) -> str:
     title = str(idea.get("title") or progress.get("idea_id") or "pending idea")
+    constraints_missing_field_summaries = [
+        str(item).strip()
+        for item in progress.get("constraints_review_missing_field_summaries", [])
+        if str(item).strip()
+    ]
+    if constraints_missing_field_summaries:
+        return f"当前最早一条 pending idea `{title}` 的 constraints review 仍有 intake / merge 缺口，先补 intake 信息再继续。{constraints_missing_field_summaries[0]}"
     missing_fields = progress.get("missing_fields", [])
     if missing_fields:
         preview = _format_missing_field_labels(missing_fields)
@@ -42,7 +50,15 @@ def _constraints_review_reason(idea: dict[str, Any], progress: dict[str, Any]) -
 def _reuse_review_reason(idea: dict[str, Any], progress: dict[str, Any]) -> str:
     title = str(idea.get("title") or progress.get("idea_id") or "pending idea")
     summary = str(progress.get("reuse_review_summary") or "").strip()
+    detail_summaries = [
+        str(item).strip()
+        for item in progress.get("reuse_review_detail_summaries", [])
+        if str(item).strip()
+    ]
+    detail_summary = detail_summaries[0] if detail_summaries else ""
     if summary:
+        if detail_summary:
+            return f"当前最早一条 pending idea `{title}` 已有 merge plan，但 event / scene reuse 仍需人工复核。{summary}{detail_summary}"
         return f"当前最早一条 pending idea `{title}` 已有 merge plan，但 event / scene reuse 仍需人工复核。{summary}"
     return f"当前最早一条 pending idea `{title}` 已有 merge plan，但 event / scene reuse 仍需人工复核。"
 
@@ -248,6 +264,8 @@ def run_outline_workspace_pipeline(
         if not target_idea_id:
             raise ValueError("apply-merge requires a pending idea.")
         progress = inspect_pending_idea_progress(workspace, {"id": target_idea_id})
+        if progress.get("constraints_review_apply_ready") and progress.get("reuse_review_apply_ready"):
+            raise ValueError(f"apply-merge has conflicting review decisions for `{target_idea_id}`.")
         if progress.get("constraints_review_apply_ready"):
             applied = apply_approved_constraints_review(workspace, target_idea_id)
             result["executed"] = True
@@ -260,10 +278,30 @@ def run_outline_workspace_pipeline(
             result["reuse_review"] = applied["reuse_review"]
             result["merge_result"] = applied["merge_result"]
             return result
-        applied = apply_approved_constraints_review(workspace, target_idea_id)
+        plan = plan_idea_merge(workspace, target_idea_id)
+        if plan.get("review_tokens"):
+            raise ValueError(f"apply-merge requires review decision for `{target_idea_id}`.")
+        if any(
+            not is_direct_ready_merge_input(item)
+            for item in plan.get("timeline_merge_inputs", [])
+        ):
+            raise ValueError(f"apply-merge has non-direct merge inputs for `{target_idea_id}`.")
+        ready_merge_input_ids = [
+            str(item.get("id") or "").strip()
+            for item in plan.get("timeline_merge_inputs", [])
+            if str(item.get("id") or "").strip() and is_direct_ready_merge_input(item)
+        ]
+        if not ready_merge_input_ids:
+            raise ValueError(f"apply-merge has no direct-ready merge inputs for `{target_idea_id}`.")
+        applied = apply_idea_merge(
+            workspace,
+            idea_id=target_idea_id,
+            merge_input_ids=ready_merge_input_ids,
+            resolution_note="按当前 merge plan 直接应用可执行 merge inputs。",
+        )
         result["executed"] = True
-        result["constraints_review"] = applied["constraints_review"]
-        result["merge_result"] = applied["merge_result"]
+        result["merge_plan"] = plan
+        result["merge_result"] = applied
         return result
 
     raise ValueError(f"unsupported action: {selected_action}")

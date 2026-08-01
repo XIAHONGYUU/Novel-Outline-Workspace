@@ -7,6 +7,7 @@ from .merge import apply_idea_merge, plan_idea_merge
 from .workspace import (
     collect_workspace_status,
     compute_review_plan_fingerprint,
+    is_review_ready_merge_input,
     now_iso,
     read_json,
     render_workspace_views,
@@ -64,10 +65,106 @@ def _merge_input_snapshot(item: dict[str, Any]) -> dict[str, Any]:
         "strategy": str(item.get("strategy") or "").strip(),
         "summary": str(item.get("summary") or "").strip(),
         "target_files": [str(path).strip() for path in item.get("target_files", []) if str(path).strip()],
+        "source_issue_codes": [
+            str(code).strip()
+            for code in item.get("source_issue_codes", [])
+            if str(code).strip()
+        ],
         "can_apply_directly": bool(item.get("can_apply_directly")),
         "missing_fields": [str(field).strip() for field in item.get("missing_fields", []) if str(field).strip()],
         "resolves_blocked_gate": bool(item.get("resolves_blocked_gate")),
+        "warnings": [str(field).strip() for field in item.get("warnings", []) if str(field).strip()],
+        "review_tokens": [str(field).strip() for field in item.get("review_tokens", []) if str(field).strip()],
+        "apply_arg_conflicts": [
+            row
+            for row in item.get("apply_arg_conflicts", [])
+            if isinstance(row, dict)
+        ],
+        "apply_arg_review_holds": [
+            row
+            for row in item.get("apply_arg_review_holds", [])
+            if isinstance(row, dict)
+        ],
     }
+
+
+def _remaining_input_kind(item: dict[str, Any]) -> str:
+    missing_fields = [str(field).strip() for field in item.get("missing_fields", []) if str(field).strip()]
+    if missing_fields:
+        return "missing-fields"
+    review_tokens = [str(field).strip() for field in item.get("review_tokens", []) if str(field).strip()]
+    if review_tokens:
+        return "constraints-review"
+    warnings = [str(field).strip() for field in item.get("warnings", []) if str(field).strip()]
+    if warnings:
+        return "needs-review"
+    return "pending"
+
+
+def _remaining_input_summary(item: dict[str, Any], remaining_kind: str) -> str:
+    if remaining_kind == "missing-fields":
+        missing_fields = [str(field).strip() for field in item.get("missing_fields", []) if str(field).strip()]
+        if missing_fields:
+            return f"仍待补齐字段：{', '.join(missing_fields)}"
+        return "仍待补齐 merge 字段。"
+    if remaining_kind == "constraints-review":
+        review_tokens = [str(field).strip() for field in item.get("review_tokens", []) if str(field).strip()]
+        if review_tokens:
+            return f"仍待 constraints 复核：{', '.join(review_tokens)}"
+        return "仍待 constraints 复核。"
+    if remaining_kind == "needs-review":
+        return "仍待人工复核后再决定是否继续 apply。"
+    return "当前尚未消费这条 merge input。"
+
+
+def _remaining_merge_input_snapshot(item: dict[str, Any]) -> dict[str, Any]:
+    snapshot = _merge_input_snapshot(item)
+    remaining_kind = _remaining_input_kind(snapshot)
+    snapshot["remaining_kind"] = remaining_kind
+    snapshot["remaining_summary"] = _remaining_input_summary(snapshot, remaining_kind)
+    return snapshot
+
+
+def _remaining_review_input_snapshots(review_inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        _remaining_merge_input_snapshot(item)
+        for item in review_inputs
+        if str(item.get("id") or "").strip()
+    ]
+
+
+def _remaining_review_input_ids(review_inputs: list[dict[str, Any]]) -> list[str]:
+    return [
+        str(item.get("id") or "").strip()
+        for item in review_inputs
+        if str(item.get("id") or "").strip()
+    ]
+
+
+def _backfill_remaining_review_inputs(report: dict[str, Any], decision: dict[str, Any]) -> list[dict[str, Any]]:
+    existing = [
+        item
+        for item in decision.get("remaining_review_merge_inputs", report.get("remaining_review_merge_inputs", []))
+        if isinstance(item, dict)
+    ]
+    if existing:
+        return existing
+    merge_plan_path = str(report.get("merge_plan_path") or "").strip()
+    if not merge_plan_path:
+        return []
+    plan = read_json(Path(merge_plan_path), {})
+    selected_ids = {
+        str(item).strip()
+        for item in decision.get("selected_merge_input_ids", [])
+        if str(item).strip()
+    }
+    remaining_inputs = [
+        _merge_input_snapshot(item)
+        for item in plan.get("timeline_merge_inputs", [])
+        if str(item.get("id") or "").strip() not in selected_ids
+        and not is_review_ready_merge_input(item)
+    ]
+    return _remaining_review_input_snapshots(remaining_inputs)
 
 
 def _review_checklist(review_policy: str, constraints_action: dict[str, Any], ready_inputs: list[dict[str, Any]]) -> list[str]:
@@ -134,6 +231,25 @@ def _is_apply_ready_decision(
         if str(item).strip()
     }
     return bool(selected_ids) and selected_ids.issubset(ready_ids)
+
+
+def _refresh_existing_decision(
+    decision: dict[str, Any],
+    *,
+    ready_inputs: list[dict[str, Any]],
+    merge_plan_fingerprint: str,
+) -> dict[str, Any]:
+    if not decision:
+        return {}
+    if bool(decision.get("applied")) or str(decision.get("status") or "").strip() == "rejected":
+        return dict(decision)
+    refreshed = dict(decision)
+    refreshed["apply_ready"] = _is_apply_ready_decision(
+        refreshed,
+        ready_inputs=ready_inputs,
+        merge_plan_fingerprint=merge_plan_fingerprint,
+    )
+    return refreshed
 
 
 def _decision_summary(status: str, selected_merge_input_ids: list[str], review_policy_summary: str) -> str:
@@ -292,6 +408,7 @@ def _build_applied_constraints_review(
         str(archived.get("constraints_summary") or "").strip(),
     )
     archived["review_checklist"] = []
+    archived["remaining_review_merge_inputs"] = _backfill_remaining_review_inputs(report, decision)
     archived["ready_merge_inputs"] = []
     archived["blocked_merge_inputs"] = []
     archived["consistency_gate"] = _archive_consistency_gate(decision)
@@ -407,29 +524,36 @@ def review_constraints(workspace: Path, idea_id: str) -> dict[str, Any]:
     ready_merge_inputs = [
         _merge_input_snapshot(item)
         for item in plan.get("timeline_merge_inputs", [])
-        if bool(item.get("can_apply_directly")) and not item.get("missing_fields")
+        if is_review_ready_merge_input(item)
     ]
     blocked_merge_inputs = [
         _merge_input_snapshot(item)
         for item in plan.get("timeline_merge_inputs", [])
-        if not (bool(item.get("can_apply_directly")) and not item.get("missing_fields"))
+        if not is_review_ready_merge_input(item)
     ]
     review_policy = str(constraints_action.get("review_policy") or "").strip()
     review_policy_summary = str(constraints_action.get("review_policy_summary") or "").strip()
     constraints_summary = str(constraints_action.get("summary") or "").strip()
     review_required = str(constraints_action.get("readiness") or "").strip() == "needs-review"
+    merge_plan_fingerprint = compute_review_plan_fingerprint(plan)
+    effective_decision = _refresh_existing_decision(
+        existing_decision,
+        ready_inputs=ready_merge_inputs,
+        merge_plan_fingerprint=merge_plan_fingerprint,
+    )
 
     report = {
         "idea_id": idea_id,
         "title": plan.get("title"),
         "status": plan.get("status"),
         "review_required": review_required,
-        "review_state": _review_state(review_required, existing_decision),
-        "review_status_summary": _review_status_summary(review_required, existing_decision, constraints_summary),
+        "review_state": _review_state(review_required, effective_decision),
+        "review_status_summary": _review_status_summary(review_required, effective_decision, constraints_summary),
         "review_policy": review_policy,
         "review_policy_summary": review_policy_summary,
         "constraints_summary": constraints_summary,
         "review_checklist": _review_checklist(review_policy, constraints_action, ready_merge_inputs),
+        "remaining_review_merge_inputs": _remaining_review_input_snapshots(blocked_merge_inputs),
         "ready_merge_inputs": ready_merge_inputs,
         "blocked_merge_inputs": blocked_merge_inputs,
         "action_matrix": action_matrix,
@@ -438,8 +562,8 @@ def review_constraints(workspace: Path, idea_id: str) -> dict[str, Any]:
         "merge_plan_view_path": str(plan.get("view_path") or ""),
         "created_at": now_iso(),
     }
-    if existing_decision:
-        report["decision"] = existing_decision
+    if effective_decision:
+        report["decision"] = effective_decision
     report_path = _constraints_review_path(workspace, idea_id)
     write_json(report_path, report)
     report["report_path"] = str(report_path.resolve())
@@ -479,6 +603,7 @@ def record_constraints_review_decision(
         raise ValueError(f"unsupported constraints review decision: {decision}")
 
     merge_plan = report.get("merge_plan", {})
+    remaining_review_inputs = report.get("blocked_merge_inputs", [])
     decision_record = {
         "status": decision,
         "summary": _decision_summary(
@@ -490,6 +615,8 @@ def record_constraints_review_decision(
         "reviewer": str(reviewer or "").strip(),
         "selected_merge_input_ids": selected_ids,
         "selected_merge_inputs": _selected_merge_input_snapshots(ready_inputs, selected_ids),
+        "remaining_review_merge_input_ids": _remaining_review_input_ids(remaining_review_inputs),
+        "remaining_review_merge_inputs": _remaining_review_input_snapshots(remaining_review_inputs),
         "apply_ready": _is_apply_ready_decision(
             {
                 "status": decision,
@@ -520,6 +647,8 @@ def record_constraints_review_decision(
         report_path = Path(str(report.get("report_path") or _constraints_review_path(workspace, idea_id))).expanduser().resolve()
         persisted_report = {key: value for key, value in terminal_report.items() if key not in {"report_path", "merge_plan"}}
         write_json(report_path, persisted_report)
+        status = collect_workspace_status(workspace)
+        render_workspace_views(workspace, status=status, validation_report=rejected_result["validation_report"])
         terminal_report["report_path"] = str(report_path)
         return terminal_report
 
@@ -553,6 +682,7 @@ def apply_approved_constraints_review(workspace: Path, idea_id: str) -> dict[str
             if str(item).strip()
         ],
         resolution_note=str(decision.get("resolution_note") or "").strip(),
+        override_consistency_gate=True,
     )
     refreshed_decision = dict(decision)
     refreshed_decision["apply_ready"] = False
@@ -563,6 +693,9 @@ def apply_approved_constraints_review(workspace: Path, idea_id: str) -> dict[str
     report_path = Path(str(report.get("report_path") or _constraints_review_path(workspace, idea_id))).expanduser().resolve()
     persisted_report = {key: value for key, value in refreshed_report.items() if key not in {"report_path", "merge_plan"}}
     write_json(report_path, persisted_report)
+    status = collect_workspace_status(workspace)
+    validation_report = result.get("merge_result", result).get("validation_report", {})
+    render_workspace_views(workspace, status=status, validation_report=validation_report)
     refreshed_report["report_path"] = str(report_path)
     return {
         "constraints_review": refreshed_report,

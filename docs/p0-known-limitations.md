@@ -1,6 +1,6 @@
 # P0 Known Limitations
 
-最后更新：2026-06-06
+最后更新：2026-08-01
 
 这份文档回答的是：
 
@@ -82,28 +82,35 @@
 - 真实 workspace 已证明这种落法能稳定闭环
 - 这属于“canon 联动可以更厚”，不是“主链路现在不能用”
 
-### 5. `review-constraints` 目前是“报告 + 人工决策”，还不是“决策写回脚本”
+### 5. review-only path 仍保留人工确认点
 
 当前已有：
 
-- 推荐动作
-- 结构化 review 报告
-- ready merge inputs 列表
+- `review-constraints -> resolve-constraints-review -> apply-merge`
+- `review-reuse -> resolve-reuse-review -> apply-merge`
+- `approved-ready-merge-inputs / rejected` 两种正式 decision
+- 按 `merge_plan_fingerprint` 校验 freshness
+- apply / reject 后的 archive 语义
+- archived report 中保留 `remaining_review_merge_inputs`
 
-当前还没有：
+当前仍不自动做什么：
 
-- 一个统一的“确认 review 结论并写回 workspace”脚本
+- 不绕过人工确认直接消费带 `review_tokens / missing_fields / apply_arg_conflicts / apply_arg_review_holds` 的输入
+- 不把未批准的 reuse 歧义或 constraints 剩余项静默并入
+- 不把 archived review 重新伪装成 live pending review
 
 当前为什么可接受：
 
-- `P0` 目标是把 review-only path 说明白，而不是把所有人工复核都自动化
-- 只要系统已经能明确停在 review，并把可继续消费的输入列清楚，这条路径当前就算阶段内够用
+- `P0` 已收口；constraints / reuse 两条 review-only 主路径都已经有确定性写回与真实 workspace 验收样例
+- 当前剩余问题是 P1 表达与执行层厚化，不是 P0 主链路 blocker
+- 保留人工确认点可以避免把复用歧义、主体范围歧义或缺字段输入误当作直接可执行输入
 
 ## 四、哪些还不算已接受限制
 
 以下情况如果出现，仍应重新上提优先级，而不是留在本清单：
 
 - `review-constraints` 反复出现，但系统说不清为什么 review
+- `review-reuse` 反复出现，但 archived report 说不清剩余项是 `reuse-ambiguity`、`missing-fields` 还是其他原因
 - ready merge inputs 被错误地打回 `repair-intake`
 - 同一类 world-rule case 在真实 workspace 中反复出现不一致策略
 - 已知限制开始直接阻断 `ingest -> check-consistency -> plan-merge -> apply-merge -> validate`
@@ -116,9 +123,9 @@
 - `repair-intake` 仍需人工补关键字段
 - location 推断仍可能出现弱值
 - 部分 `character` beat 先只落 scene
-- `review-constraints` 仍以“报告 + 人工决策”为主
+- review-only path 仍保留人工确认点，但 constraints / reuse writeback 已落地
 
 这意味着下一步默认不该继续围绕这些点横向补细节，而应把注意力放在：
 
 - 是否还有新的真实 blocker 会把这些限制重新升级
-- 如果没有，`P1` 应优先怎样把 review-only path 继续推进成正式写回入口
+- 如果没有，`P1` 应优先继续厚化 `timeline merge` 执行层，并维护 archived / reuse 剩余项表达

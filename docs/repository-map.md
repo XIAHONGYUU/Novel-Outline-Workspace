@@ -57,9 +57,8 @@
 首个独立 workflow 案例工作区：
 
 - 从零初始化
-- 至少包含 1 条真实 pending idea
-- 当前停在 `check-consistency` 已过、`plan-merge` 已生成、尚未 `apply` 的状态
- - 当前已完成首轮完整闭环，并继续作为 apply / validate 回归样本
+- 已完成首轮完整闭环
+- 继续作为 apply / validate 回归样本
 
 ### `src/novel_outline_workspace/`
 
@@ -123,5 +122,6 @@ workspace-template/
     ├── README.md
     ├── consistency-checks/
     ├── intake-drafts/
-    └── merge-plans/
+    ├── merge-plans/
+    └── review-history/
 ```

@@ -1,22 +1,22 @@
 # Workspace Acceptance Framework
 
-最后更新：2026-06-06
+最后更新：2026-08-01
 
 这份文档不是记录单条规则，也不是记录单个样例细节。
 
 它回答的是更上层的问题：
 
-`P0 阶段到底按什么框架推进，而不是继续靠零散样例往前拱？`
+`P0 阶段到底按什么框架推进，以及 P0 收口后怎样继续约束 P1？`
 
 ## 核心思路
 
-当前默认推进方式改成：
+当前默认推进方式是：
 
 1. 先定义一组稳定的 `acceptance tracks`
 2. 每一轮优先补齐某一条 track 的真实闭环
 3. 只有某条 track 被真实 workspace 卡住时，才回头修脚本、规则或 planner
 
-这意味着后续不再默认问：
+这意味着 P0 已收口后，后续也不再默认问：
 
 - “还能再补哪个句式？”
 - “还能再加哪个局部规则？”
@@ -229,31 +229,28 @@
 3. 如果被卡住，先修脚本 / planner / apply
 4. 只有脚本层确实解决不了，才回头补 consistency 微规则
 
+## P1 Extension
+
+P0 acceptance tracks 当前已作为收口基线保留。P1 不再新增一批泛化 track，而是沿着已验证主链路继续厚化执行层。
+
+当前 P1 主线：
+
+- `timeline merge` 执行层厚化：继续收紧 event / scene reuse、字段优先级、record 聚合、dedupe 后解释字段与 tri-state review hold
+- deterministic review writeback 维护：constraints / reuse 两条路径都已落地，后续重点是保持 decision freshness、readiness hard gate 与 pipeline 路由一致
+- archived / reuse 表达维护：继续让 archived report、首页和 review history 聚合页准确展示执行结果、剩余项类型与后续原因
+
+当前不再把这些事当成 P0 blocker：
+
+- 再补一条 relationship / knowledge / world-rule 微样例
+- 把所有 review-only path 变成无人工确认的自动 apply
+- 为 archived review 另造一层新事实源
+
 ## 当前结论
 
-从顶层看，项目已经不缺“再多一个局部能力入口”。
-
-当前更缺的是：
-
-- 用统一框架追踪哪些工作区闭环已经收口
-- 明确下一条该补的是哪一条 acceptance track
-- 把零散样例推进，逐步沉成可复用的阶段框架
-
-因此，下一步默认不是继续在 `Track 10` 里横向补更多 `world-rule` 细粒度 case，而是：
-
-`做一次 P0 收口审计，把 review-only path、已知限制与阶段边界统一写清楚`
-
-当前这一步已落到：
-
-- `docs/p0-known-limitations.md`
-
-因此再下一步默认应转向：
-
-`判断 P0 是否已满足正式收口条件`
-
-当前结论：
+从顶层看：
 
 - `P0` 已正式收口
-- 下一阶段默认转入：
+- `constraints / reuse review writeback` 已落地
+- 真实 workspace 已有 constraints 与 reuse 两条 review-only writeback 验收样例
 
-`P1：执行层厚化与 deterministic review writeback`
+下一阶段默认继续按 `P1：执行层厚化与 review 表达维护` 推进，优先处理 `timeline merge` 执行层厚化与 archived / reuse 剩余项表达，而不是回到 P0 收口审计。

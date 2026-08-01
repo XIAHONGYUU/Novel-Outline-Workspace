@@ -57,15 +57,15 @@
 当前建议分三档：
 
 - `P0`
-  第一阶段必须做，没有它们就无法形成稳定工作流。
+  第一阶段必须做；当前已形成主链路闭环。
 - `P1`
-  第二阶段高价值增强，能明显提升工作区质量。
+  当前阶段重点；优先厚化已落地执行层与 review 表达，而不是先扩一批全新 skill。
 - `P2`
   第三阶段优化型 skill，更偏向深化和可视化。
 
 ---
 
-## P0 Skills
+## P0 Skills（已形成主链路）
 
 ### `novel-idea-intake`
 
@@ -207,22 +207,27 @@ MVP 已落地：
 
 #### 当前实现状态
 
-第一层输入已落地：
+第一层输入与执行层已落地，当前进入 P1 厚化：
 
 - `plan_idea_merge` 开始输出 `timeline_merge_inputs`
 - `apply_idea_merge` 可按 `merge_input_id` 直接消费
+- 同一 idea 可一次性消费多条 `merge_input_id`
+- constraints / reuse review decision 已可继续驱动 `apply-merge`
+- direct-ready / review-ready 判定已收敛，并在 `apply_idea_merge()` 入口层有 hard gate
 - 当前优先覆盖：
   - 新建 event / scene 输入
   - 基于 `timeline-order / knowledge-state / location` issue 的已有记录更新
   - relationship idea 的 canon relationship 输入
   - 基于 `relationship-history / first-meeting` issue 的 canon relationship 更新
+  - world-rule exception / knowledge-state 类输入
+  - event / scene reuse 的第一版 review hold 与 dedupe 解释
 
 仍待补强：
 
-- 更完整的 canon 联动
-- world-rule 类输入
-- 更细的 issue-specific strategy
-- 更细的 relationship graph 豁免边界
+- event / scene reuse resolver 的字段优先级与脆弱边界
+- `location / notes / title / participants / scene characters / scene POV` 等字段的共享 helper 收敛
+- 更多 tri-state 字段的 review hold 语义
+- archived review 中 reuse 剩余项与执行结果的持续表达维护
 
 #### 为什么重要
 
@@ -631,7 +636,9 @@ novel-ending-payoff-check
 
 ## 当前建议开发顺序
 
-### 第一阶段
+当前 `P0` 已正式收口。后续不再按“先把 P0 skill 都补出来”推进，而是按 P1 主线维护现有闭环。
+
+### 已收口基线
 
 1. `novel-idea-intake`
 2. `novel-consistency-check`
@@ -640,14 +647,14 @@ novel-ending-payoff-check
 5. `novel-arc-structure-manager`
 6. `novel-outline-orchestrator`
 
-### 第二阶段
+### P1 当前优先
 
-1. `novel-character-network-manager`
-2. `novel-location-manager`
-3. `novel-foreshadow-and-payoff`
-4. `novel-knowledge-state-tracker`
+1. 继续厚化 `novel-timeline-merge` 的 event / scene reuse 执行层
+2. 维护 constraints / reuse review writeback 与 readiness gate 的一致性
+3. 维护 archived / reuse review history 的剩余项、执行结果与后续原因表达
+4. 只有当真实 workspace 闭环需要时，再推进 `novel-location-manager`、`novel-character-network-manager`、`novel-knowledge-state-tracker` 这类专题 skill
 
-### 第三阶段
+### P2 后续深化
 
 1. `novel-map-view-builder`
 2. `novel-timeline-audit`
@@ -660,6 +667,7 @@ novel-ending-payoff-check
 
 - skill 之间不互相重叠
 - 每个 skill 的输入输出边界清楚
-- P0 能尽快形成闭环
+- P0 闭环不被 P1 厚化打断
+- 执行层、review writeback、archived 表达继续落在脚本和 state 事实源上，而不是变成模糊 agent 行为
 
 这份文档就是为了固定这个边界，方便后续继续实现时不漂。

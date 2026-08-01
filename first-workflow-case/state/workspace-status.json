@@ -24,15 +24,17 @@
   "view_files": {
     "index": "views/index.html",
     "validation_report": "views/validation-report.html",
-    "timeline": "views/timeline.html"
+    "timeline": "views/timeline.html",
+    "consistency_index": "views/consistency-checks/index.html",
+    "review_history_index": "views/review-history/index.html"
   },
   "last_validation": {
     "ok": true,
     "error_count": 0,
     "warning_count": 0,
     "report_path": "/home/zuoky/project2/first-workflow-case/views/validation-report.html",
-    "validated_at": "2026-07-05T03:12:24Z"
+    "validated_at": "2026-08-01T14:33:30Z"
   },
   "recommended_next_step": "继续扩充正式大纲，并在每轮改动后运行 validator。",
-  "updated_at": "2026-07-05T03:12:24Z"
+  "updated_at": "2026-08-01T14:33:30Z"
 }

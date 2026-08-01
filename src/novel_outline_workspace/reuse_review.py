@@ -7,6 +7,7 @@ from .merge import apply_idea_merge, plan_idea_merge
 from .workspace import (
     collect_workspace_status,
     compute_review_plan_fingerprint,
+    is_review_ready_merge_input,
     now_iso,
     read_json,
     render_workspace_views,
@@ -58,10 +59,25 @@ def _merge_input_snapshot(item: dict[str, Any]) -> dict[str, Any]:
         "strategy": str(item.get("strategy") or "").strip(),
         "summary": str(item.get("summary") or "").strip(),
         "target_files": [str(path).strip() for path in item.get("target_files", []) if str(path).strip()],
+        "source_issue_codes": [
+            str(code).strip()
+            for code in item.get("source_issue_codes", [])
+            if str(code).strip()
+        ],
         "can_apply_directly": bool(item.get("can_apply_directly")),
         "missing_fields": [str(field).strip() for field in item.get("missing_fields", []) if str(field).strip()],
         "warnings": [str(field).strip() for field in item.get("warnings", []) if str(field).strip()],
         "review_tokens": [str(field).strip() for field in item.get("review_tokens", []) if str(field).strip()],
+        "apply_arg_conflicts": [
+            row
+            for row in item.get("apply_arg_conflicts", [])
+            if isinstance(row, dict)
+        ],
+        "apply_arg_review_holds": [
+            row
+            for row in item.get("apply_arg_review_holds", [])
+            if isinstance(row, dict)
+        ],
     }
 
 
@@ -139,10 +155,7 @@ def _backfill_remaining_review_inputs(report: dict[str, Any], decision: dict[str
         _merge_input_snapshot(item)
         for item in plan.get("timeline_merge_inputs", [])
         if str(item.get("id") or "").strip() not in selected_ids
-        and (
-            any(str(token).strip().startswith("reuse-ambiguity-") for token in item.get("review_tokens", []))
-            or bool(item.get("missing_fields"))
-        )
+        and not is_review_ready_merge_input(item)
     ]
     return _remaining_review_input_snapshots(remaining_inputs)
 
@@ -534,8 +547,7 @@ def review_reuse(workspace: Path, idea_id: str) -> dict[str, Any]:
     ready_merge_inputs = [
         _merge_input_snapshot(item)
         for item in plan.get("timeline_merge_inputs", [])
-        if not item.get("missing_fields")
-        and str(item.get("id") or "").strip() not in review_input_ids
+        if is_review_ready_merge_input(item) and str(item.get("id") or "").strip() not in review_input_ids
     ]
     blocked_merge_inputs = [
         _merge_input_snapshot(item)
@@ -660,6 +672,8 @@ def record_reuse_review_decision(
         report_path = Path(str(report.get("report_path") or _reuse_review_path(workspace, idea_id))).expanduser().resolve()
         persisted_report = {key: value for key, value in terminal_report.items() if key not in {"report_path", "merge_plan"}}
         write_json(report_path, persisted_report)
+        status = collect_workspace_status(workspace)
+        render_workspace_views(workspace, status=status, validation_report=rejected_result["validation_report"])
         terminal_report["report_path"] = str(report_path)
         return terminal_report
 
@@ -704,6 +718,9 @@ def apply_approved_reuse_review(workspace: Path, idea_id: str) -> dict[str, Any]
     report_path = Path(str(report.get("report_path") or _reuse_review_path(workspace, idea_id))).expanduser().resolve()
     persisted_report = {key: value for key, value in refreshed_report.items() if key not in {"report_path", "merge_plan"}}
     write_json(report_path, persisted_report)
+    status = collect_workspace_status(workspace)
+    validation_report = result.get("merge_result", result).get("validation_report", {})
+    render_workspace_views(workspace, status=status, validation_report=validation_report)
     refreshed_report["report_path"] = str(report_path)
     return {
         "reuse_review": refreshed_report,

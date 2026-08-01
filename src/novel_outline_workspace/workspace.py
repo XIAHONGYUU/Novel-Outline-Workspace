@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 import hashlib
 from copy import deepcopy
@@ -130,6 +131,8 @@ MERGE_MISSING_FIELD_LABELS = {
     "participant_ids": "事件参与角色",
     "event_label": "事件标题",
     "scene_title": "场景标题",
+    "scene_pov": "场景视角",
+    "scene_character_ids": "场景角色",
     "relationship_character_ids": "关系角色",
     "relationship_reading_chapter": "关系发生章序",
     "knowledge_reading_chapter": "知情发生章序",
@@ -179,6 +182,7 @@ def _default_status(workspace: Path) -> dict[str, Any]:
             "validation_report": "views/validation-report.html",
             "timeline": "views/timeline.html",
             "consistency_index": "views/consistency-checks/index.html",
+            "review_history_index": "views/review-history/index.html",
         },
         "last_validation": {
             "ok": False,
@@ -243,6 +247,28 @@ def _merge_plan_missing_fields(plan: dict[str, Any]) -> list[str]:
     return sorted(missing_fields)
 
 
+def merge_input_has_structural_review_risk(item: dict[str, Any]) -> bool:
+    return bool(
+        item.get("missing_fields")
+        or item.get("warnings")
+        or item.get("review_tokens")
+        or item.get("apply_arg_conflicts")
+        or item.get("apply_arg_review_holds")
+    )
+
+
+def merge_input_has_review_risk(item: dict[str, Any]) -> bool:
+    return bool(merge_input_has_structural_review_risk(item) or item.get("requires_override"))
+
+
+def is_direct_ready_merge_input(item: dict[str, Any]) -> bool:
+    return bool(item.get("can_apply_directly")) and not merge_input_has_review_risk(item)
+
+
+def is_review_ready_merge_input(item: dict[str, Any]) -> bool:
+    return not merge_input_has_structural_review_risk(item)
+
+
 def _format_missing_field_labels(fields: list[str]) -> str:
     labels: list[str] = []
     for field in fields:
@@ -265,6 +291,71 @@ def _reuse_remaining_summaries(report: dict[str, Any]) -> list[str]:
         if summary and summary not in summaries:
             summaries.append(summary)
     return summaries
+
+
+def _reuse_remaining_detail_summary(item: dict[str, Any]) -> str:
+    if not isinstance(item, dict):
+        return ""
+    for hold in item.get("apply_arg_review_holds", []):
+        if not isinstance(hold, dict):
+            continue
+        field = str(hold.get("field") or "").strip()
+        if field:
+            return f"仍需人工确认字段：{field}"
+    for conflict in item.get("apply_arg_conflicts", []):
+        if not isinstance(conflict, dict):
+            continue
+        key = str(conflict.get("key") or "").strip()
+        if key:
+            return f"仍有 apply_args 差异：{key}"
+    source_issue_codes = [str(code).strip() for code in item.get("source_issue_codes", []) if str(code).strip()]
+    if source_issue_codes:
+        return f"相关 issue：{', '.join(source_issue_codes)}"
+    return ""
+
+
+def _reuse_remaining_detail_summaries(items: list[dict[str, Any]]) -> list[str]:
+    summaries: list[str] = []
+    for item in items:
+        summary = _reuse_remaining_detail_summary(item)
+        if summary and summary not in summaries:
+            summaries.append(summary)
+    return summaries
+
+
+def _review_remaining_display(item: dict[str, Any]) -> str:
+    if not isinstance(item, dict):
+        return ""
+    summary = str(item.get("remaining_summary") or "").strip()
+    detail = str(_reuse_remaining_detail_summary(item) or "").strip()
+    if summary and detail:
+        summary = f"{summary}{detail}"
+    elif detail:
+        summary = detail
+    kind = str(item.get("remaining_kind") or "").strip()
+    if kind and summary:
+        return f"[{kind}] {summary}"
+    if kind:
+        return f"[{kind}]"
+    return summary
+
+
+def _review_action_summaries(report: dict[str, Any]) -> list[str]:
+    preferred: list[str] = []
+    fallback: list[str] = []
+    for action in report.get("action_matrix", []):
+        if not isinstance(action, dict):
+            continue
+        domain = str(action.get("domain") or "").strip()
+        summary = str(action.get("summary") or "").strip()
+        if not summary:
+            continue
+        if domain not in {"review", "constraints"} and summary not in preferred:
+            preferred.append(summary)
+            continue
+        if summary not in fallback:
+            fallback.append(summary)
+    return preferred or fallback
 
 
 def _reuse_remaining_summaries_for_kind(report: dict[str, Any], remaining_kind: str) -> list[str]:
@@ -294,6 +385,17 @@ def _plan_reuse_remaining_summaries(plan: dict[str, Any]) -> list[str]:
     return summaries
 
 
+def _plan_reuse_remaining_detail_summaries(plan: dict[str, Any]) -> list[str]:
+    return _reuse_remaining_detail_summaries(
+        [
+            item
+            for item in plan.get("timeline_merge_inputs", [])
+            if isinstance(item, dict)
+            and any(str(token).strip().startswith("reuse-ambiguity-") for token in item.get("review_tokens", []))
+        ]
+    )
+
+
 def _reuse_remaining_kinds(report: dict[str, Any]) -> list[str]:
     kinds: list[str] = []
     for item in report.get("remaining_review_merge_inputs", []):
@@ -303,6 +405,83 @@ def _reuse_remaining_kinds(report: dict[str, Any]) -> list[str]:
         if kind and kind not in kinds:
             kinds.append(kind)
     return kinds
+
+
+def _review_history_entries(workspace: Path) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    review_sources = [
+        ("reuse", workspace / "state/reuse-reviews"),
+        ("constraints", workspace / "state/constraint-reviews"),
+    ]
+    for review_kind, directory in review_sources:
+        if not directory.exists():
+            continue
+        files = sorted(directory.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+        for path in files:
+            report = read_json(path, {})
+            if not isinstance(report, dict):
+                continue
+            review_state = str(report.get("review_state") or "").strip()
+            if review_state not in {"applied", "rejected"}:
+                continue
+            remaining_inputs = [
+                item
+                for item in report.get("remaining_review_merge_inputs", [])
+                if isinstance(item, dict)
+            ]
+            remaining_summaries = [
+                _review_remaining_display(item)
+                for item in remaining_inputs
+                if _review_remaining_display(item)
+            ]
+            result_snapshot = report.get("applied_result") or report.get("rejected_result") or {}
+            action_summaries = _review_action_summaries(report)
+            entries.append(
+                {
+                    "kind": review_kind,
+                    "review_state": review_state,
+                    "title": str(report.get("title") or report.get("idea_id") or path.stem).strip(),
+                    "idea_id": str(report.get("idea_id") or "").strip(),
+                    "review_status_summary": str(report.get("review_status_summary") or "").strip(),
+                    "remaining_summary": remaining_summaries[0] if remaining_summaries else "",
+                    "detail_summary": "",
+                    "action_summary": action_summaries[0] if action_summaries else "",
+                    "validation_ok": bool(result_snapshot.get("validation_ok")),
+                    "validation_report_path": str(result_snapshot.get("validation_report_path") or "").strip(),
+                    "merge_plan_view_path": str(report.get("merge_plan_view_path") or "").strip(),
+                    "applied_at": str(
+                        result_snapshot.get("applied_at")
+                        or report.get("updated_at")
+                        or report.get("created_at")
+                        or ""
+                    ).strip(),
+                    "report_path": str(path.resolve()),
+                }
+            )
+    return sorted(entries, key=lambda item: (item.get("applied_at") or "", item.get("idea_id") or ""), reverse=True)
+
+
+def _idea_status_by_id(workspace: Path) -> dict[str, str]:
+    ideas = read_json(workspace / "state/idea-log.json", {"ideas": []}).get("ideas", [])
+    statuses: dict[str, str] = {}
+    for idea in ideas:
+        idea_id = str(idea.get("id") or "").strip()
+        status = str(idea.get("status") or "").strip()
+        if idea_id and status:
+            statuses[idea_id] = status
+    return statuses
+
+
+def _consistency_report_display_status(report: dict[str, Any], idea_statuses: dict[str, str]) -> dict[str, str]:
+    idea_id = str(report.get("idea_id") or "").strip()
+    idea_status = idea_statuses.get(idea_id, "")
+    if idea_status == "applied":
+        return {"label": "archived applied", "badge_class": "ok"}
+    if idea_status == "rejected":
+        return {"label": "archived rejected", "badge_class": "soft"}
+    if report.get("conflict_count", 0) > 0 or report.get("error_count", 0) > 0:
+        return {"label": "needs review", "badge_class": "warning"}
+    return {"label": "clear", "badge_class": "ok"}
 
 
 def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict[str, Any]:
@@ -322,6 +501,7 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
             "reuse_review_summary": "",
             "reuse_review_tokens": [],
             "reuse_review_remaining_summaries": [],
+            "reuse_review_detail_summaries": [],
             "reuse_review_missing_field_summaries": [],
             "reuse_review_remaining_kinds": [],
             "warning_codes": [],
@@ -344,6 +524,7 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
             "reuse_review_summary": "",
             "reuse_review_tokens": [],
             "reuse_review_remaining_summaries": [],
+            "reuse_review_detail_summaries": [],
             "reuse_review_missing_field_summaries": [],
             "reuse_review_remaining_kinds": [],
             "warning_codes": [],
@@ -382,6 +563,7 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
             "reuse_review_summary": "",
             "reuse_review_tokens": [],
             "reuse_review_remaining_summaries": [],
+            "reuse_review_detail_summaries": [],
             "reuse_review_missing_field_summaries": [],
             "reuse_review_remaining_kinds": [],
             "warning_codes": warning_codes,
@@ -405,6 +587,7 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
             "reuse_review_summary": "",
             "reuse_review_tokens": [],
             "reuse_review_remaining_summaries": [],
+            "reuse_review_detail_summaries": [],
             "reuse_review_missing_field_summaries": [],
             "reuse_review_remaining_kinds": [],
             "warning_codes": warning_codes,
@@ -429,8 +612,7 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
         ready_merge_input_ids = {
             str(item.get("id") or "").strip()
             for item in plan.get("timeline_merge_inputs", [])
-            if bool(item.get("can_apply_directly"))
-            and not item.get("missing_fields")
+            if is_review_ready_merge_input(item)
             and str(item.get("id") or "").strip()
         }
         review_decision_apply_ready = set(approved_merge_input_ids).issubset(ready_merge_input_ids)
@@ -452,9 +634,7 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
         ready_merge_input_ids = {
             str(item.get("id") or "").strip()
             for item in plan.get("timeline_merge_inputs", [])
-            if not item.get("missing_fields")
-            and str(item.get("id") or "").strip()
-            and not any(str(token).strip().startswith("reuse-ambiguity-") for token in item.get("review_tokens", []))
+            if is_review_ready_merge_input(item) and str(item.get("id") or "").strip()
         }
         reuse_review_apply_ready = set(approved_reuse_merge_input_ids).issubset(ready_merge_input_ids)
 
@@ -466,9 +646,27 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
     reuse_review_summary = ""
     reuse_review_tokens: list[str] = []
     reuse_review_remaining_summaries = _reuse_remaining_summaries(reuse_review_report) or _plan_reuse_remaining_summaries(plan)
+    reuse_review_detail_summaries = _reuse_remaining_detail_summaries(
+        [
+            item
+            for item in reuse_review_report.get("remaining_review_merge_inputs", [])
+            if isinstance(item, dict)
+        ]
+    ) or _plan_reuse_remaining_detail_summaries(plan)
     reuse_review_missing_field_summaries = _reuse_remaining_summaries_for_kind(reuse_review_report, "missing-fields")
     reuse_review_remaining_kinds = _reuse_remaining_kinds(reuse_review_report)
     reuse_review_missing_fields = "missing-fields" in reuse_review_remaining_kinds
+    constraints_review_remaining_summaries = _reuse_remaining_summaries(review_report)
+    constraints_review_detail_summaries = _reuse_remaining_detail_summaries(
+        [
+            item
+            for item in review_report.get("remaining_review_merge_inputs", [])
+            if isinstance(item, dict)
+        ]
+    )
+    constraints_review_missing_field_summaries = _reuse_remaining_summaries_for_kind(review_report, "missing-fields")
+    constraints_review_remaining_kinds = _reuse_remaining_kinds(review_report)
+    constraints_review_missing_fields = "missing-fields" in constraints_review_remaining_kinds
     needs_reuse_review = False
     for action in plan.get("proposed_actions", []):
         if str(action.get("domain") or "").strip() != "constraints":
@@ -505,17 +703,22 @@ def inspect_pending_idea_progress(workspace: Path, idea: dict[str, Any]) -> dict
         "report_status": "fresh",
         "plan_status": "fresh",
         "has_conflicts": has_conflicts,
-        "needs_intake_repair": False if review_decision_apply_ready or reuse_review_apply_ready or needs_constraints_review else bool(
-            default_needs_intake_repair or reuse_review_missing_fields
+        "needs_intake_repair": False if review_decision_apply_ready or reuse_review_apply_ready or (needs_constraints_review and not constraints_review_missing_fields) else bool(
+            default_needs_intake_repair or reuse_review_missing_fields or constraints_review_missing_fields
         ),
-        "needs_constraints_review": False if review_decision_apply_ready or reuse_review_apply_ready else needs_constraints_review,
+        "needs_constraints_review": False if review_decision_apply_ready or reuse_review_apply_ready or constraints_review_missing_fields else needs_constraints_review,
         "needs_reuse_review": False if review_decision_apply_ready or reuse_review_apply_ready or reuse_review_missing_fields else needs_reuse_review,
         "constraints_review_summary": constraints_review_summary,
         "constraints_review_policy": constraints_review_policy,
         "constraints_review_policy_summary": constraints_review_policy_summary,
+        "constraints_review_remaining_summaries": constraints_review_remaining_summaries,
+        "constraints_review_detail_summaries": constraints_review_detail_summaries,
+        "constraints_review_missing_field_summaries": constraints_review_missing_field_summaries,
+        "constraints_review_remaining_kinds": constraints_review_remaining_kinds,
         "reuse_review_summary": reuse_review_summary,
         "reuse_review_tokens": reuse_review_tokens,
         "reuse_review_remaining_summaries": reuse_review_remaining_summaries,
+        "reuse_review_detail_summaries": reuse_review_detail_summaries,
         "reuse_review_missing_field_summaries": reuse_review_missing_field_summaries,
         "reuse_review_remaining_kinds": reuse_review_remaining_kinds,
         "constraints_review_decision_status": str(review_decision.get("status") or "").strip(),
@@ -542,9 +745,19 @@ def describe_pending_idea_next_step(workspace: Path, idea: dict[str, Any]) -> st
         for item in progress.get("reuse_review_remaining_summaries", [])
         if str(item).strip()
     ]
+    reuse_detail_summaries = [
+        str(item).strip()
+        for item in progress.get("reuse_review_detail_summaries", [])
+        if str(item).strip()
+    ]
     reuse_missing_field_summaries = [
         str(item).strip()
         for item in progress.get("reuse_review_missing_field_summaries", [])
+        if str(item).strip()
+    ]
+    constraints_missing_field_summaries = [
+        str(item).strip()
+        for item in progress.get("constraints_review_missing_field_summaries", [])
         if str(item).strip()
     ]
     reuse_remaining_kinds = {
@@ -567,14 +780,19 @@ def describe_pending_idea_next_step(workspace: Path, idea: dict[str, Any]) -> st
     if progress.get("reuse_review_apply_ready"):
         decision_summary = str(progress.get("reuse_review_decision_summary") or "").strip()
         remaining_summary = reuse_remaining_summaries[0] if reuse_remaining_summaries else ""
+        detail_summary = reuse_detail_summaries[0] if reuse_detail_summaries else ""
         if decision_summary:
             if remaining_summary:
-                return f"基于 `{title}` 已确认的 reuse review 结论，直接 apply 已批准的 merge inputs。{decision_summary}{remaining_summary}"
+                suffix = f"{remaining_summary}{detail_summary}" if detail_summary else remaining_summary
+                return f"基于 `{title}` 已确认的 reuse review 结论，直接 apply 已批准的 merge inputs。{decision_summary}{suffix}"
             return f"基于 `{title}` 已确认的 reuse review 结论，直接 apply 已批准的 merge inputs。{decision_summary}"
         if remaining_summary:
-            return f"基于 `{title}` 已确认的 reuse review 结论，直接 apply 已批准的 merge inputs。{remaining_summary}"
+            suffix = f"{remaining_summary}{detail_summary}" if detail_summary else remaining_summary
+            return f"基于 `{title}` 已确认的 reuse review 结论，直接 apply 已批准的 merge inputs。{suffix}"
         return f"基于 `{title}` 已确认的 reuse review 结论，直接 apply 已批准的 merge inputs。"
     if progress["needs_intake_repair"]:
+        if constraints_missing_field_summaries:
+            return f"先补 `{title}` 的 intake / merge 缺口，再继续 constraints review。{constraints_missing_field_summaries[0]}"
         if "missing-fields" in reuse_remaining_kinds and reuse_missing_field_summaries:
             return f"先补 `{title}` 的 intake / merge 缺口，再继续 reuse review。{reuse_missing_field_summaries[0]}"
         if progress["missing_fields"]:
@@ -593,12 +811,15 @@ def describe_pending_idea_next_step(workspace: Path, idea: dict[str, Any]) -> st
     if progress.get("needs_reuse_review"):
         summary = str(progress.get("reuse_review_summary") or "").strip()
         remaining_summary = reuse_remaining_summaries[0] if reuse_remaining_summaries else ""
+        detail_summary = reuse_detail_summaries[0] if reuse_detail_summaries else ""
         if summary:
             if remaining_summary:
-                return f"先复核 `{title}` 的 event / scene reuse 歧义。{summary}{remaining_summary}"
+                suffix = f"{remaining_summary}{detail_summary}" if detail_summary else remaining_summary
+                return f"先复核 `{title}` 的 event / scene reuse 歧义。{summary}{suffix}"
             return f"先复核 `{title}` 的 event / scene reuse 歧义。{summary}"
         if remaining_summary:
-            return f"先复核 `{title}` 的 event / scene reuse 歧义。{remaining_summary}"
+            suffix = f"{remaining_summary}{detail_summary}" if detail_summary else remaining_summary
+            return f"先复核 `{title}` 的 event / scene reuse 歧义。{suffix}"
         return f"先复核 `{title}` 的 event / scene reuse 歧义，再决定如何 merge。"
     if progress["has_conflicts"]:
         return f"优先处理 `{title}` 的 merge plan，用结构化 merge inputs 消解当前 consistency 冲突。"
@@ -644,7 +865,9 @@ def collect_workspace_status(workspace: Path) -> dict[str, Any]:
         "scenes": len(scenes),
     }
     status["core_files"] = {path: (workspace / path).exists() for path in CORE_JSON_FILES}
-    status["view_files"] = stored_status.get("view_files", status["view_files"])
+    stored_view_files = stored_status.get("view_files", {})
+    if isinstance(stored_view_files, dict):
+        status["view_files"] = {**status["view_files"], **stored_view_files}
     status["last_validation"] = stored_status.get("last_validation", status["last_validation"])
 
     if status["last_validation"].get("error_count", 0) > 0:
@@ -1094,12 +1317,14 @@ def _render_status_html(workspace: Path, status: dict[str, Any]) -> str:
     ideas = read_json(workspace / "state/idea-log.json", {"ideas": []}).get("ideas", [])
     pending_ideas = [idea for idea in ideas if idea.get("status") == "pending"]
     applied_ideas = [idea for idea in ideas if idea.get("status") == "applied"]
+    review_history_entries = _review_history_entries(workspace)[:4]
     merge_plan_dir = workspace / "state/merge-plans"
     merge_plan_files = sorted(merge_plan_dir.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True) if merge_plan_dir.exists() else []
     latest_merge_plans = [read_json(path, {}) for path in merge_plan_files[:4]]
     consistency_dir = workspace / "state/consistency-checks"
     consistency_files = sorted(consistency_dir.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True) if consistency_dir.exists() else []
     latest_consistency_reports = [read_json(path, {}) for path in consistency_files[:4]]
+    idea_statuses = _idea_status_by_id(workspace)
     events = read_json(workspace / "timeline/events.json", {"events": []}).get("events", [])
     recent_events = sorted(
         events,
@@ -1177,12 +1402,30 @@ def _render_status_html(workspace: Path, status: dict[str, Any]) -> str:
           <div>{_safe('conflicts ' + str(report.get('conflict_count', 0)) + ' / warnings ' + str(report.get('warning_count', 0)))}</div>
           <div class="meta">
             <code>{_safe(report.get('idea_id'))}</code>
-            <span class="badge {'warning' if report.get('conflict_count', 0) > 0 or report.get('error_count', 0) > 0 else 'ok'}">{'needs review' if report.get('conflict_count', 0) > 0 or report.get('error_count', 0) > 0 else 'clear'}</span>
+            <span class="badge {_safe(_consistency_report_display_status(report, idea_statuses)['badge_class'])}">{_safe(_consistency_report_display_status(report, idea_statuses)['label'])}</span>
           </div>
         </div>
         """
         for report in latest_consistency_reports
     ) or '<div class="empty">当前还没有 idea-level consistency reports。</div>'
+
+    review_history_markup = "\n".join(
+        f"""
+        <div class="list-row">
+          <strong>{_safe(item.get('title'))}</strong>
+          <div>{_safe(item.get('review_status_summary'))}</div>
+          {f'<div class="submetric">{_safe(item.get("action_summary"))}</div>' if item.get('action_summary') else ''}
+          {f'<div class="submetric">{_safe(str(item.get("remaining_summary") or "") + str(item.get("detail_summary") or ""))}</div>' if item.get('remaining_summary') or item.get('detail_summary') else ''}
+          <div class="meta">
+            <span class="badge soft">{_safe(item.get('kind'))}</span>
+            <span class="badge {'ok' if item.get('review_state') == 'applied' else 'warning'}">{_safe(item.get('review_state'))}</span>
+            <span class="badge {'ok' if item.get('validation_ok') else 'warning'}">{'validated' if item.get('validation_ok') else 'needs-check'}</span>
+            <code>{_safe(item.get('idea_id'))}</code>
+          </div>
+        </div>
+        """
+        for item in review_history_entries
+    ) or '<div class="empty">当前还没有已归档的 review history。</div>'
 
     event_markup = "\n".join(
         f"""
@@ -1224,6 +1467,7 @@ def _render_status_html(workspace: Path, status: dict[str, Any]) -> str:
             <a href="validation-report.html">校验报告</a>
             <a href="timeline.html">时间线</a>
             <a href="merge-plans/">Merge Plans</a>
+            <a href="review-history/index.html">Review History</a>
           </nav>
         </div>
         <div class="hero-rail">
@@ -1272,6 +1516,10 @@ def _render_status_html(workspace: Path, status: dict[str, Any]) -> str:
             <a class="action-card" href="consistency-checks/index.html">
               <strong>先看 Consistency</strong>
               <span>在并入之前先检查单条 idea 是否和现有 canon、timeline、scene 冲突。</span>
+            </a>
+            <a class="action-card" href="review-history/index.html">
+              <strong>查看 Review History</strong>
+              <span>集中查看已归档的 constraints / reuse review 结果和剩余待处理项。</span>
             </a>
             <a class="action-card" href="../state/workspace-status.json">
               <strong>检查状态源</strong>
@@ -1348,6 +1596,16 @@ def _render_status_html(workspace: Path, status: dict[str, Any]) -> str:
             <span class="badge soft">{len(latest_consistency_reports)} visible</span>
           </div>
           <div class="list-card">{consistency_markup}</div>
+        </article>
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Review History</div>
+              <h2>Recent Review Outcomes</h2>
+            </div>
+            <span class="badge soft">{len(review_history_entries)} visible</span>
+          </div>
+          <div class="list-card">{review_history_markup}</div>
         </article>
         <article class="panel">
           <div class="section-head">
@@ -1431,6 +1689,7 @@ def _render_validation_html(report: dict[str, Any], status: dict[str, Any]) -> s
         <a href="index.html">总览</a>
         <a href="validation-report.html">校验报告</a>
         <a href="timeline.html">时间线</a>
+        <a href="review-history/index.html">Review History</a>
       </nav>
     </header>
     <section class="grid">
@@ -1486,6 +1745,7 @@ def _render_timeline_html(workspace: Path, status: dict[str, Any]) -> str:
         <a href="index.html">总览</a>
         <a href="validation-report.html">校验报告</a>
         <a href="timeline.html">时间线</a>
+        <a href="review-history/index.html">Review History</a>
       </nav>
     </header>
     <section class="panel" style="margin-top: 24px;">
@@ -1500,6 +1760,7 @@ def _render_consistency_index_html(workspace: Path, status: dict[str, Any]) -> s
     consistency_dir = workspace / "state/consistency-checks"
     report_files = sorted(consistency_dir.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True) if consistency_dir.exists() else []
     reports = [read_json(path, {}) for path in report_files]
+    idea_statuses = _idea_status_by_id(workspace)
     rows = "\n".join(
         f"""
         <tr>
@@ -1507,7 +1768,7 @@ def _render_consistency_index_html(workspace: Path, status: dict[str, Any]) -> s
           <td>{_safe(report.get('title'))}</td>
           <td>{_safe(report.get('conflict_count', 0))}</td>
           <td>{_safe(report.get('warning_count', 0))}</td>
-          <td><span class="badge {'warning' if report.get('conflict_count', 0) > 0 or report.get('error_count', 0) > 0 else 'ok'}">{'needs review' if report.get('conflict_count', 0) > 0 or report.get('error_count', 0) > 0 else 'clear'}</span></td>
+          <td><span class="badge {_safe(_consistency_report_display_status(report, idea_statuses)['badge_class'])}">{_safe(_consistency_report_display_status(report, idea_statuses)['label'])}</span></td>
           <td><a href="{_safe(Path(report.get('view_path', '')).name or '')}">详情</a></td>
         </tr>
         """
@@ -1522,6 +1783,7 @@ def _render_consistency_index_html(workspace: Path, status: dict[str, Any]) -> s
         <a href="../index.html">总览</a>
         <a href="../validation-report.html">校验报告</a>
         <a href="../timeline.html">时间线</a>
+        <a href="../review-history/index.html">Review History</a>
       </nav>
     </header>
     <section class="panel" style="margin-top: 24px;">
@@ -1530,6 +1792,68 @@ def _render_consistency_index_html(workspace: Path, status: dict[str, Any]) -> s
     </section>
     """
     return _html_page(f"{status.get('novel_name')} · Consistency Checks", body)
+
+
+def _render_review_history_index_html(workspace: Path, status: dict[str, Any]) -> str:
+    entries = _review_history_entries(workspace)
+    link_base = workspace / "views/review-history"
+
+    def _workspace_relative_href(path: str) -> str:
+        target = Path(path)
+        if not target.is_absolute():
+            target = workspace / target
+        return Path(os.path.relpath(target, link_base)).as_posix()
+
+    def _history_links(item: dict[str, Any]) -> str:
+        links: list[str] = []
+        merge_plan_view_path = str(item.get("merge_plan_view_path") or "").strip()
+        if merge_plan_view_path:
+            merge_plan_name = Path(merge_plan_view_path).name
+            links.append(f'<a href="../merge-plans/{_safe(merge_plan_name)}">merge plan</a>')
+        report_path = str(item.get("report_path") or "").strip()
+        if report_path:
+            links.append(f'<a href="{_safe(_workspace_relative_href(report_path))}">review json</a>')
+        validation_report_path = str(item.get("validation_report_path") or "").strip()
+        if validation_report_path:
+            links.append(f'<a href="../validation-report.html">validation</a>')
+        if not links:
+            return "-"
+        return " / ".join(links)
+
+    rows = "\n".join(
+        f"""
+        <tr>
+          <td><code>{_safe(item.get('idea_id'))}</code></td>
+          <td>{_safe(item.get('title'))}</td>
+          <td><span class="badge soft">{_safe(item.get('kind'))}</span></td>
+          <td><span class="badge {'ok' if item.get('review_state') == 'applied' else 'warning'}">{_safe(item.get('review_state'))}</span></td>
+          <td>{_safe(item.get('review_status_summary'))}</td>
+          <td>{_safe(item.get('action_summary') or '-')}</td>
+          <td>{_safe((str(item.get('remaining_summary') or '') + str(item.get('detail_summary') or '')).strip() or '-')}</td>
+          <td><span class="badge {'ok' if item.get('validation_ok') else 'warning'}">{'validated' if item.get('validation_ok') else 'needs-check'}</span></td>
+          <td>{_history_links(item)}</td>
+        </tr>
+        """
+        for item in entries
+    )
+    body = f"""
+    <header class="hero">
+      <div class="eyebrow">Review History</div>
+      <h1>{_safe(status.get('novel_name'))} Review Outcomes</h1>
+      <p>这里汇总已归档的 `constraints / reuse review` 结果，方便从工作区入口直接回看已消费或已拒绝的 review 决策。</p>
+      <nav>
+        <a href="../index.html">总览</a>
+        <a href="../validation-report.html">校验报告</a>
+        <a href="../timeline.html">时间线</a>
+        <a href="../consistency-checks/index.html">Consistency</a>
+      </nav>
+    </header>
+    <section class="panel" style="margin-top: 24px;">
+      <h2>Archived Review Reports</h2>
+      {f'<table><thead><tr><th>Idea</th><th>Title</th><th>Kind</th><th>State</th><th>Status Summary</th><th>Action Result</th><th>Remaining</th><th>Validation</th><th>Links</th></tr></thead><tbody>{rows}</tbody></table>' if rows else '<div class="empty">当前还没有已归档的 review history。</div>'}
+    </section>
+    """
+    return _html_page(f"{status.get('novel_name')} · Review History", body)
 
 
 def render_workspace_views(
@@ -1552,14 +1876,17 @@ def render_workspace_views(
     validation_path = workspace / "views/validation-report.html"
     timeline_path = workspace / "views/timeline.html"
     consistency_index_path = workspace / "views/consistency-checks/index.html"
+    review_history_index_path = workspace / "views/review-history/index.html"
 
     write_text(index_path, _render_status_html(workspace, status))
     write_text(validation_path, _render_validation_html(validation_report, status))
     write_text(timeline_path, _render_timeline_html(workspace, status))
     write_text(consistency_index_path, _render_consistency_index_html(workspace, status))
+    write_text(review_history_index_path, _render_review_history_index_html(workspace, status))
     return {
         "consistency_index": str(consistency_index_path.resolve()),
         "index": str(index_path.resolve()),
+        "review_history_index": str(review_history_index_path.resolve()),
         "validation_report": str(validation_path.resolve()),
         "timeline": str(timeline_path.resolve()),
     }

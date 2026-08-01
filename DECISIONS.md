@@ -2,6 +2,39 @@
 
 这个文件记录会影响项目方向、实现边界和协作方式的关键决策。
 
+## 2026-07-29
+
+### 决策：archived review history 的下一层展示先消费 `action_matrix` 摘要，不新增独立 detail state
+
+当前状态：
+
+- `views/index.html` 与 `views/review-history/index.html` 已经能看见 archived `reuse / constraints review`
+- 但上一轮展示仍主要停在：
+  - `review_state`
+  - `review_status_summary`
+  - remaining summary / detail
+  - cross-links
+- archived report 自身其实已经稳定带有 `action_matrix`，里面明确记录了这次 decision 最终把动作落到了 `review / timeline / outline / canon` 哪一层
+
+因此这一轮确认：
+
+- 先不为 archived review 新开独立 detail state 或单独 detail page
+- 先直接消费现有 report 里的 `action_matrix`
+- 首页与 `views/review-history/index.html` 统一展示首条执行结果摘要
+- 这层展示默认同时覆盖 `reuse / constraints` 两条 path，而不是只先补一侧
+
+原因：
+
+- 当前更需要的是把“这条 review 最终做成了什么”直接暴露出来，而不是继续增加入口数量
+- `action_matrix` 已经是稳定事实源，继续复用它比再造一层 history 专用结构风险更低
+- 先把 `reuse / constraints` 的 archived history 表达对齐，可以减少后续只在 reuse 侧越做越厚的偏移
+
+影响：
+
+- archived review history 现在不再只表达“已应用 / 已拒绝”，还会直接表达“最终写入落点”
+- 这次推进仍停留在 report -> view 的下沉，不改变 `ingest -> check-consistency -> plan-merge -> apply-merge -> validate` 主链路判定
+- 下一步默认优先级仍回到执行层：继续检查 `timeline merge` 的 reuse resolver、字段优先级与 tri-state hold 边界
+
 ## 2026-07-05
 
 ### 决策：`review-reuse` 的第一条真实 workspace 验收样例先采用“只消费非歧义旧 event，保留 scene 双关联歧义不自动并入”的收口策略

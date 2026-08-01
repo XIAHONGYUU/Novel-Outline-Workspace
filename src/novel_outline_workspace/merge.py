@@ -21,6 +21,7 @@ from .workspace import (
     now_iso,
     read_json,
     render_workspace_views,
+    merge_input_has_review_risk,
     slugify,
     validate_workspace,
     write_json,
@@ -159,6 +160,18 @@ def _target_file_domains(target_files: list[str]) -> list[str]:
     return sorted(set(domains))
 
 
+def _source_issue_codes_for_item(item: dict[str, Any]) -> list[str]:
+    aggregated = [
+        str(code).strip()
+        for code in item.get("source_issue_codes", [])
+        if str(code).strip()
+    ]
+    if aggregated:
+        return list(dict.fromkeys(aggregated))
+    single = str(item.get("source_issue_code") or "").strip()
+    return [single] if single else []
+
+
 def _readiness_for_input(item: dict[str, Any], gate: dict[str, Any]) -> str:
     if item.get("missing_fields"):
         return "needs-info"
@@ -184,8 +197,8 @@ def _source_signals_for_input(domain: str, item: dict[str, Any], draft: dict[str
     mentions = draft.get("character_mentions", [])
     if mentions:
         signals.append(f"intake: characters {', '.join(str(item) for item in mentions[:3])}")
-    if item.get("source_issue_code"):
-        signals.append(f"consistency: {item.get('source_issue_code')}")
+    for issue_code in _source_issue_codes_for_item(item):
+        signals.append(f"consistency: {issue_code}")
     if domain == "canon":
         if apply_args.get("world_rule_exception_object_phrase") or apply_args.get("world_rule_exception_object_key"):
             subject_name = apply_args.get("world_rule_exception_subject_name") or apply_args.get("world_rule_exception_subject_id") or "角色"
@@ -200,7 +213,7 @@ def _source_signals_for_input(domain: str, item: dict[str, Any], draft: dict[str
         elif report.get("knowledge_claims"):
             claim = report["knowledge_claims"][0]
             signals.append(f"claim: {claim.get('subject_name')} 第{claim.get('chapter')}章 {claim.get('verb')}{claim.get('object_phrase')}")
-    if domain == "constraints" and item.get("source_issue_code") == "world-rule-conflict":
+    if domain == "constraints" and "world-rule-conflict" in _source_issue_codes_for_item(item):
         signals.append("consistency: world-rule conflict")
     for review_token in item.get("review_tokens", []):
         token = str(review_token).strip()
@@ -711,7 +724,7 @@ def _constraints_group_explainer(
     world_rule_items = [
         item
         for item in items
-        if str(item.get("source_issue_code") or "") == "world-rule-conflict"
+        if "world-rule-conflict" in _source_issue_codes_for_item(item)
     ]
     strategies_by_rule: dict[str, list[str]] = {}
     targets_by_rule: dict[str, set[str]] = {}
@@ -2377,7 +2390,10 @@ def _linked_scene_character_ids_for_event(
             else:
                 fallback_matches.append(character_ids)
     matches = _prefer_titled_matches(titled_matches, fallback_matches)
-    deduped = list(dict.fromkeys(matches))
+    deduped_by_set: dict[frozenset[str], tuple[str, ...]] = {}
+    for match in matches:
+        deduped_by_set.setdefault(frozenset(match), match)
+    deduped = list(deduped_by_set.values())
     if len(deduped) == 1:
         return list(deduped[0]), False
     if len(deduped) > 1:
@@ -2647,14 +2663,49 @@ def _resolve_scene_pov_from_candidates(
     fallback_character_ids: list[str],
     id_to_name: dict[str, str],
 ) -> str | None:
-    scene_pov = _first_non_empty_text(
-        preferred_pov,
-        id_to_name.get(linked_participant_ids[0]) if linked_participant_ids else None,
-        existing_pov,
-    ) or None
-    if scene_pov or not fallback_character_ids:
-        return scene_pov
-    return id_to_name.get(fallback_character_ids[0]) or scene_pov
+    linked_pov = id_to_name.get(linked_participant_ids[0]) if linked_participant_ids else None
+    fallback_pov = id_to_name.get(fallback_character_ids[0]) if fallback_character_ids else None
+    normalized_existing_pov = str(existing_pov or "").strip() or None
+    fallback_names = {
+        str(id_to_name.get(character_id) or "").strip()
+        for character_id in fallback_character_ids
+        if str(id_to_name.get(character_id) or "").strip()
+    }
+    if preferred_pov:
+        return preferred_pov
+    if linked_pov:
+        return linked_pov
+    if normalized_existing_pov and (not fallback_names or normalized_existing_pov in fallback_names):
+        return normalized_existing_pov
+    return fallback_pov or normalized_existing_pov
+
+
+def _resolve_scene_reuse_people(
+    *,
+    preferred_character_ids: Any,
+    linked_event_id: str | None,
+    linked_participant_ids: list[str],
+    existing_character_ids: list[Any],
+    preferred_pov: str | None,
+    existing_pov: str | None,
+    id_to_name: dict[str, str],
+) -> tuple[list[str], str | None]:
+    # If a scene is being explicitly re-linked to an event that has no participant signal,
+    # keep the character/POV side unresolved instead of silently preserving stale scene people.
+    preserve_existing_people = not linked_event_id or bool(preferred_character_ids) or bool(linked_participant_ids)
+    scene_character_ids = _first_non_empty_id_list(
+        preferred_character_ids,
+        linked_participant_ids,
+        existing_character_ids if preserve_existing_people else [],
+    )
+    scene_pov = _resolve_scene_pov_from_candidates(
+        preferred_pov=preferred_pov,
+        linked_participant_ids=linked_participant_ids,
+        existing_pov=existing_pov if preserve_existing_people else None,
+        fallback_character_ids=scene_character_ids,
+        id_to_name=id_to_name,
+    )
+    return scene_character_ids, scene_pov
 
 
 def _resolve_scene_reuse_event_ids(
@@ -2699,6 +2750,7 @@ def _build_default_timeline_merge_input(
         "summary": summary,
         "target_files": target_files,
         "source_issue_code": None,
+        "source_issue_codes": [],
         "source_patch_suggestion_ids": [],
         "missing_fields": missing_fields,
         "can_apply_directly": gate.get("can_apply_merge", False) and not missing_fields,
@@ -2766,6 +2818,7 @@ def _build_default_relationship_merge_input(
         ),
         "target_files": ["state/canon-index.json", "canon/characters.md"],
         "source_issue_code": None,
+        "source_issue_codes": [],
         "source_patch_suggestion_ids": [],
         "missing_fields": missing_fields,
         "can_apply_directly": gate.get("can_apply_merge", False) and not missing_fields,
@@ -2810,6 +2863,7 @@ def _build_knowledge_merge_input_for_claim(
         "summary": f"把 `{claim.get('subject_name')}` 关于 `{claim.get('object_phrase')}` 的知情变化补进 canon 机器真相源。",
         "target_files": ["state/canon-index.json", "canon/characters.md"],
         "source_issue_code": None,
+        "source_issue_codes": [],
         "source_patch_suggestion_ids": [],
         "missing_fields": missing_fields,
         "can_apply_directly": gate.get("can_apply_merge", False) and not missing_fields,
@@ -2919,6 +2973,15 @@ def _issue_record_groups(report: dict[str, Any]) -> list[tuple[str, str, list[di
     return [(record_type, record_id, grouped[(record_type, record_id)]) for record_type, record_id in ordered_keys]
 
 
+def _merged_issue_codes(issues: list[dict[str, Any]]) -> list[str]:
+    issue_codes: list[str] = []
+    for issue in issues:
+        issue_code = str(issue.get("code") or "").strip()
+        if issue_code and issue_code not in issue_codes:
+            issue_codes.append(issue_code)
+    return issue_codes
+
+
 def _merged_patch_suggestion_ids(report: dict[str, Any], issues: list[dict[str, Any]]) -> list[str]:
     suggestion_ids: list[str] = []
     for issue in issues:
@@ -2947,6 +3010,7 @@ def _build_issue_driven_timeline_merge_inputs(
     for record_type, record_id, record_issues in _issue_record_groups(report):
         primary_issue = min(record_issues, key=lambda item: _issue_priority(str(item.get("code") or "")))
         issue_code = str(primary_issue.get("code") or "")
+        issue_codes = _merged_issue_codes(record_issues)
         details = primary_issue.get("details", {}) if isinstance(primary_issue.get("details"), dict) else {}
         draft_chapter = next(
             (
@@ -3047,16 +3111,13 @@ def _build_issue_driven_timeline_merge_inputs(
             )
             linked_event = event_map.get(linked_event_id) if linked_event_id else None
             linked_participant_ids = list(linked_event.get("participants", [])) if linked_event else []
-            scene_character_ids = _first_non_empty_id_list(
-                default_apply_args.get("scene_character_ids"),
-                linked_participant_ids,
-                list(scene.get("characters", [])),
-            )
-            scene_pov = _resolve_scene_pov_from_candidates(
-                preferred_pov=str(default_apply_args.get("scene_pov") or "").strip() or None,
+            scene_character_ids, scene_pov = _resolve_scene_reuse_people(
+                preferred_character_ids=default_apply_args.get("scene_character_ids"),
+                linked_event_id=linked_event_id,
                 linked_participant_ids=linked_participant_ids,
+                existing_character_ids=list(scene.get("characters", [])),
+                preferred_pov=str(default_apply_args.get("scene_pov") or "").strip() or None,
                 existing_pov=str(scene.get("pov") or "").strip() or None,
-                fallback_character_ids=scene_character_ids,
                 id_to_name=id_to_name,
             )
             compatible_existing_event_ids = _compatible_scene_event_ids_for_draft(
@@ -3089,6 +3150,10 @@ def _build_issue_driven_timeline_merge_inputs(
                 missing_fields.append("scene_title")
             if not isinstance(chapter_number, int):
                 missing_fields.append("chapter_number")
+            if not apply_args["scene_character_ids"]:
+                missing_fields.append("scene_character_ids")
+            if not apply_args["scene_pov"]:
+                missing_fields.append("scene_pov")
             if scene_event_ids_missing:
                 missing_fields.append("scene_event_ids")
             strategy = "update-existing-scene"
@@ -3103,6 +3168,7 @@ def _build_issue_driven_timeline_merge_inputs(
                 "summary": _summary_for_issue_input(primary_issue, issue_code, record_id),
                 "target_files": target_files,
                 "source_issue_code": issue_code,
+                "source_issue_codes": issue_codes,
                 "source_patch_suggestion_ids": _merged_patch_suggestion_ids(report, record_issues),
                 "missing_fields": missing_fields,
                 "can_apply_directly": gate.get("can_apply_merge", False) and not missing_fields,
@@ -3179,6 +3245,7 @@ def _build_issue_driven_knowledge_merge_inputs(
                         ),
                         "target_files": scene_targets,
                         "source_issue_code": issue_code,
+                        "source_issue_codes": [issue_code],
                         "source_patch_suggestion_ids": _patch_suggestion_ids(report, issue_code),
                         "missing_fields": scene_missing_fields,
                         "can_apply_directly": not scene_missing_fields,
@@ -3230,6 +3297,7 @@ def _build_issue_driven_knowledge_merge_inputs(
                 ),
                 "target_files": ["state/canon-index.json", "canon/characters.md"],
                 "source_issue_code": issue_code,
+                "source_issue_codes": [issue_code],
                 "source_patch_suggestion_ids": _patch_suggestion_ids(report, issue_code),
                 "missing_fields": missing_fields,
                 "can_apply_directly": not missing_fields,
@@ -3301,6 +3369,7 @@ def _build_issue_driven_relationship_merge_inputs(
                         "summary": f"保留既有关系 `{relationship_id}` 的 canon 首次记录，仅把 `{idea.get('title')}` 作为后续关系 beat 并入 scene。",
                         "target_files": scene_targets,
                         "source_issue_code": issue_code,
+                        "source_issue_codes": [issue_code],
                         "source_patch_suggestion_ids": _patch_suggestion_ids(report, issue_code),
                         "missing_fields": scene_missing_fields,
                         "can_apply_directly": not scene_missing_fields,
@@ -3338,6 +3407,7 @@ def _build_issue_driven_relationship_merge_inputs(
                 ),
                 "target_files": ["state/canon-index.json", "canon/characters.md"],
                 "source_issue_code": issue_code,
+                "source_issue_codes": [issue_code],
                 "source_patch_suggestion_ids": _patch_suggestion_ids(report, issue_code),
                 "missing_fields": missing_fields,
                 "can_apply_directly": (gate.get("can_apply_merge", False) or resolves_from_canon) and not missing_fields,
@@ -3406,6 +3476,7 @@ def _build_issue_driven_world_rule_merge_inputs(
                 "summary": f"把 `{event_label}` 延后到第 {delayed_chapter} 章，并保持原有约束 cutoff 不变。",
                 "target_files": list(default_targets),
                 "source_issue_code": issue_code,
+                "source_issue_codes": [issue_code],
                 "source_patch_suggestion_ids": _patch_suggestion_ids(report, issue_code),
                 "missing_fields": sorted(set(delay_missing_fields)),
                 "can_apply_directly": not delay_missing_fields,
@@ -3442,6 +3513,7 @@ def _build_issue_driven_world_rule_merge_inputs(
                 "summary": f"创建/更新 `{event_label}`，并把约束 `{rule_id}` 的截止点对齐到该事件。",
                 "target_files": targets,
                 "source_issue_code": issue_code,
+                "source_issue_codes": [issue_code],
                 "source_patch_suggestion_ids": _patch_suggestion_ids(report, issue_code),
                 "missing_fields": sorted(set(missing_fields)),
                 "can_apply_directly": not missing_fields,
@@ -3488,6 +3560,7 @@ def _build_issue_driven_world_rule_merge_inputs(
                 "summary": f"保留 `{rule_id}` 的 cutoff，仅补一条规则说明，记录 `{idea.get('title')}` 的人工解释边界。",
                 "target_files": ["state/canon-index.json", "constraints/constraints.json", "canon/world-rules.md"],
                 "source_issue_code": issue_code,
+                "source_issue_codes": [issue_code],
                 "source_patch_suggestion_ids": _patch_suggestion_ids(report, issue_code),
                 "missing_fields": [],
                 "can_apply_directly": gate.get("can_apply_merge", False),
@@ -3570,7 +3643,7 @@ def _merge_input_score(item: dict[str, Any]) -> tuple[int, int, int, int]:
     return (
         1 if item.get("resolves_blocked_gate") else 0,
         1 if item.get("can_apply_directly") else 0,
-        1 if item.get("source_issue_code") else 0,
+        1 if _source_issue_codes_for_item(item) else 0,
         -len(item.get("missing_fields", []) or []),
     )
 
@@ -3585,29 +3658,105 @@ def _merge_input_value_present(value: Any) -> bool:
     return True
 
 
+def _normalized_nonempty_list(values: list[Any]) -> list[Any]:
+    return [
+        value
+        for value in dict.fromkeys(values)
+        if _merge_input_value_present(value)
+    ]
+
+
 def _merge_missing_field_satisfied(field: str, apply_args: dict[str, Any]) -> bool:
     return _merge_input_value_present(apply_args.get(field))
 
 
-def _merge_input_apply_args(primary: dict[str, Any], secondary: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+def _field_requires_review_hold(field: str, review_tokens: list[str]) -> bool:
+    review_token_map = {
+        "participant_ids": {"reuse-ambiguity-linked-scenes"},
+        "scene_event_ids": {"reuse-ambiguity-linked-events"},
+    }
+    required_tokens = review_token_map.get(field, set())
+    return bool(required_tokens) and bool(required_tokens & {str(token).strip() for token in review_tokens if str(token).strip()})
+
+
+def _review_hold_rows(fields: list[str], review_tokens: list[str]) -> list[dict[str, Any]]:
+    normalized_tokens = {str(token).strip() for token in review_tokens if str(token).strip()}
+    review_token_map = {
+        "participant_ids": ["reuse-ambiguity-linked-scenes"],
+        "scene_event_ids": ["reuse-ambiguity-linked-events"],
+    }
+    rows: list[dict[str, Any]] = []
+    for field in fields:
+        matched_tokens = [
+            token
+            for token in review_token_map.get(field, [])
+            if token in normalized_tokens
+        ]
+        rows.append(
+            {
+                "field": field,
+                "reason": "review-hold",
+                "review_tokens": matched_tokens,
+            }
+        )
+    return rows
+
+
+def _merge_input_apply_args(
+    primary: dict[str, Any],
+    secondary: dict[str, Any],
+) -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
     merged = dict(secondary)
     merged.update(primary)
     conflicts: list[str] = []
+    conflict_rows: list[dict[str, Any]] = []
     for key, secondary_value in secondary.items():
         primary_value = primary.get(key)
         if isinstance(primary_value, list) and isinstance(secondary_value, list):
-            merged[key] = list(
-                dict.fromkeys(
-                    value
-                    for value in [*primary_value, *secondary_value]
-                    if _merge_input_value_present(value)
+            normalized_primary = _normalized_nonempty_list(primary_value)
+            normalized_secondary = _normalized_nonempty_list(secondary_value)
+            merged_list = _normalized_nonempty_list([*primary_value, *secondary_value])
+            merged[key] = merged_list
+            if (
+                normalized_primary
+                and normalized_secondary
+                and normalized_primary != normalized_secondary
+                and merged_list != normalized_primary
+                and merged_list != normalized_secondary
+            ):
+                conflicts.append(f"dedupe-apply-args-list-conflict:{key}")
+                conflict_rows.append(
+                    {
+                        "key": key,
+                        "value_kind": "list",
+                        "primary_only": [value for value in normalized_primary if value not in normalized_secondary],
+                        "secondary_only": [value for value in normalized_secondary if value not in normalized_primary],
+                    }
                 )
-            )
             continue
         if isinstance(primary_value, dict) and isinstance(secondary_value, dict):
             nested = dict(secondary_value)
             nested.update(primary_value)
             merged[key] = nested
+            conflicting_subkeys: list[str] = []
+            for nested_key in sorted(set(primary_value) & set(secondary_value)):
+                primary_nested_value = primary_value.get(nested_key)
+                secondary_nested_value = secondary_value.get(nested_key)
+                if (
+                    _merge_input_value_present(primary_nested_value)
+                    and _merge_input_value_present(secondary_nested_value)
+                    and primary_nested_value != secondary_nested_value
+                ):
+                    conflicts.append(f"dedupe-apply-args-dict-conflict:{key}.{nested_key}")
+                    conflicting_subkeys.append(str(nested_key))
+            if conflicting_subkeys:
+                conflict_rows.append(
+                    {
+                        "key": key,
+                        "value_kind": "dict",
+                        "conflicting_subkeys": conflicting_subkeys,
+                    }
+                )
             continue
         if not _merge_input_value_present(primary_value) and _merge_input_value_present(secondary_value):
             merged[key] = secondary_value
@@ -3618,7 +3767,7 @@ def _merge_input_apply_args(primary: dict[str, Any], secondary: dict[str, Any]) 
             and primary_value != secondary_value
         ):
             conflicts.append(f"dedupe-apply-args-conflict:{key}")
-    return merged, conflicts
+    return merged, conflicts, conflict_rows
 
 
 def _dedupe_merge_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -3640,15 +3789,33 @@ def _dedupe_merge_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
             else (current, item)
         )
         merged = dict(preferred)
-        merged_apply_args, apply_arg_conflicts = _merge_input_apply_args(
+        merged_review_tokens = list(
+            dict.fromkeys(
+                str(value)
+                for value in [*current.get("review_tokens", []), *item.get("review_tokens", [])]
+                if str(value).strip()
+            )
+        )
+        merged_apply_args, apply_arg_conflicts, apply_arg_conflict_rows = _merge_input_apply_args(
             preferred.get("apply_args", {}) if isinstance(preferred.get("apply_args"), dict) else {},
             secondary.get("apply_args", {}) if isinstance(secondary.get("apply_args"), dict) else {},
+        )
+        held_missing_fields = sorted(
+            {
+                str(value).strip()
+                for value in [*current.get("missing_fields", []), *item.get("missing_fields", [])]
+                if str(value).strip() and _field_requires_review_hold(str(value).strip(), merged_review_tokens)
+            }
         )
         merged_missing_fields = sorted(
             {
                 str(value)
                 for value in [*current.get("missing_fields", []), *item.get("missing_fields", [])]
-                if str(value).strip() and not _merge_missing_field_satisfied(str(value).strip(), merged_apply_args)
+                if str(value).strip()
+                and (
+                    str(value).strip() in held_missing_fields
+                    or not _merge_missing_field_satisfied(str(value).strip(), merged_apply_args)
+                )
             }
         )
         merged_resolves_issue_codes = list(
@@ -3656,6 +3823,13 @@ def _dedupe_merge_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 str(value)
                 for value in [*current.get("resolves_issue_codes", []), *item.get("resolves_issue_codes", [])]
                 if str(value).strip()
+            )
+        )
+        merged_source_issue_codes = list(
+            dict.fromkeys(
+                issue_code
+                for issue_code in [*_source_issue_codes_for_item(current), *_source_issue_codes_for_item(item)]
+                if issue_code
             )
         )
         merged["target_files"] = sorted(
@@ -3675,29 +3849,35 @@ def _dedupe_merge_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         merged["warnings"] = list(
             dict.fromkeys(
                 str(value)
-                for value in [*current.get("warnings", []), *item.get("warnings", []), *apply_arg_conflicts]
+                for value in [
+                    *current.get("warnings", []),
+                    *item.get("warnings", []),
+                    *apply_arg_conflicts,
+                    *[f"dedupe-apply-args-review-hold:{field}" for field in held_missing_fields],
+                ]
                 if str(value).strip()
             )
         )
-        merged["review_tokens"] = list(
-            dict.fromkeys(
-                str(value)
-                for value in [*current.get("review_tokens", []), *item.get("review_tokens", [])]
-                if str(value).strip()
-            )
-        )
+        merged["review_tokens"] = merged_review_tokens
         merged["missing_fields"] = merged_missing_fields
         merged["resolves_issue_codes"] = merged_resolves_issue_codes
+        merged["source_issue_codes"] = merged_source_issue_codes
+        merged["apply_arg_conflicts"] = apply_arg_conflict_rows
+        merged["apply_arg_review_holds"] = _review_hold_rows(held_missing_fields, merged_review_tokens)
         merged["apply_args"] = merged_apply_args
-        merged["can_apply_directly"] = not merged_missing_fields and (
-            bool(current.get("can_apply_directly")) or bool(item.get("can_apply_directly"))
-        )
         merged["requires_override"] = bool(current.get("requires_override")) and bool(item.get("requires_override"))
+        merged["can_apply_directly"] = (
+            not merged_missing_fields
+            and (bool(current.get("can_apply_directly")) or bool(item.get("can_apply_directly")))
+            and not merge_input_has_review_risk(merged)
+        )
         merged["resolves_blocked_gate"] = not merged_missing_fields and (
             bool(merged_resolves_issue_codes) or bool(current.get("resolves_blocked_gate")) or bool(item.get("resolves_blocked_gate"))
         )
         if not merged.get("source_issue_code"):
             merged["source_issue_code"] = secondary.get("source_issue_code")
+        if not merged.get("source_issue_code") and merged_source_issue_codes:
+            merged["source_issue_code"] = merged_source_issue_codes[0]
         if not merged.get("resolution_note_suggestion"):
             merged["resolution_note_suggestion"] = secondary.get("resolution_note_suggestion")
         deduped[existing_index] = merged
@@ -3722,6 +3902,39 @@ def _renumber_story_merge_inputs(inputs: list[dict[str, Any]]) -> list[dict[str,
 
 
 def _render_merge_plan_html(plan: dict[str, Any]) -> str:
+    def _merge_input_details(item: dict[str, Any]) -> str:
+        details: list[str] = []
+        source_issue_codes = [str(code).strip() for code in item.get("source_issue_codes", []) if str(code).strip()]
+        if source_issue_codes:
+            details.append(f"source issues: {', '.join(source_issue_codes)}")
+        missing_fields = [str(field).strip() for field in item.get("missing_fields", []) if str(field).strip()]
+        if missing_fields:
+            details.append(f"missing fields: {', '.join(missing_fields)}")
+        review_tokens = [str(token).strip() for token in item.get("review_tokens", []) if str(token).strip()]
+        if review_tokens:
+            details.append(f"review tokens: {', '.join(review_tokens)}")
+        warnings = [str(token).strip() for token in item.get("warnings", []) if str(token).strip()]
+        if warnings:
+            details.append(f"warnings: {', '.join(warnings)}")
+        for hold in item.get("apply_arg_review_holds", []):
+            if not isinstance(hold, dict):
+                continue
+            field = str(hold.get("field") or "").strip()
+            tokens = [str(token).strip() for token in hold.get("review_tokens", []) if str(token).strip()]
+            detail = f"review hold: {field}" if field else "review hold"
+            if tokens:
+                detail += f" ({', '.join(tokens)})"
+            details.append(detail)
+        for conflict in item.get("apply_arg_conflicts", []):
+            if not isinstance(conflict, dict):
+                continue
+            key = str(conflict.get("key") or "").strip() or "apply_args"
+            value_kind = str(conflict.get("value_kind") or "").strip() or "value"
+            details.append(f"apply arg conflict: {key} ({value_kind})")
+        if not details:
+            return ""
+        return "<div class=\"submetric\" style=\"margin-top: 8px;\">" + "<br>".join(_safe(line) for line in details) + "</div>"
+
     action_rows = "\n".join(
         "<tr>"
         f"<td><code>{_safe(action.get('domain'))}</code></td>"
@@ -3738,7 +3951,7 @@ def _render_merge_plan_html(plan: dict[str, Any]) -> str:
         f"<td><code>{_safe(item.get('strategy'))}</code></td>"
         f"<td><code>{_safe(item.get('can_apply_directly'))}</code></td>"
         f"<td><code>{_safe(', '.join(item.get('target_files', [])))}</code></td>"
-        f"<td>{_safe(item.get('summary'))}</td>"
+        f"<td>{_safe(item.get('summary'))}{_merge_input_details(item)}</td>"
         "</tr>"
         for item in plan.get("timeline_merge_inputs", [])
     )
@@ -3761,6 +3974,7 @@ def _render_merge_plan_html(plan: dict[str, Any]) -> str:
         <a href="../index.html">总览</a>
         <a href="../validation-report.html">校验报告</a>
         <a href="../timeline.html">时间线</a>
+        <a href="../review-history/index.html">Review History</a>
       </nav>
     </header>
     <section class="panel" style="margin-top: 24px;">
@@ -4163,6 +4377,43 @@ def _load_merge_inputs_from_plan(workspace: Path, idea_id: str, merge_input_ids:
     return [_load_merge_input_from_plan(workspace, idea_id, merge_input_id) for merge_input_id in merge_input_ids]
 
 
+def _assert_merge_plan_fresh_for_apply(workspace: Path, idea: dict[str, Any], idea_id: str) -> None:
+    plan_path = workspace / "state/merge-plans" / f"{idea_id}.json"
+    if not plan_path.exists():
+        raise ValueError(f"merge plan missing for `{idea_id}`; run plan-merge first.")
+    plan = read_json(plan_path, {})
+    plan_created_at = str(plan.get("created_at") or "").strip()
+    idea_updated_at = str(idea.get("updated_at") or "").strip()
+    if plan_created_at and idea_updated_at and plan_created_at < idea_updated_at:
+        raise ValueError(f"merge plan is stale for `{idea_id}`; run plan-merge first.")
+
+
+def _mark_merge_plan_applied(
+    workspace: Path,
+    idea_id: str,
+    *,
+    resolution_note: str,
+    merge_input_ids: list[str],
+) -> None:
+    plan_path = workspace / "state/merge-plans" / f"{idea_id}.json"
+    if not plan_path.exists():
+        return
+    plan = read_json(plan_path, {})
+    if not plan:
+        return
+    plan["status"] = "applied"
+    plan["resolution_note"] = resolution_note
+    plan["applied_at"] = now_iso()
+    if merge_input_ids:
+        plan["applied_merge_input_ids"] = merge_input_ids
+        if len(merge_input_ids) == 1:
+            plan["applied_merge_input_id"] = merge_input_ids[0]
+        else:
+            plan.pop("applied_merge_input_id", None)
+    write_json(plan_path, plan)
+    write_text(workspace / "views/merge-plans" / f"{idea_id}.html", _render_merge_plan_html(plan))
+
+
 def _merge_apply_arg_values(current: Any, incoming: Any, *, key: str, merge_input_ids: list[str]) -> Any:
     if incoming in (None, "", []):
         return current
@@ -4230,8 +4481,8 @@ def _can_merge_input_resolve_blocked_gate(workspace: Path, idea_id: str, merge_i
         for code in merge_input.get("resolves_issue_codes", [])
         if str(code).strip()
     }
-    if not resolvable_codes and merge_input.get("source_issue_code"):
-        resolvable_codes.add(str(merge_input.get("source_issue_code")))
+    if not resolvable_codes:
+        resolvable_codes.update(_source_issue_codes_for_item(merge_input))
     return bool(blocking_codes) and blocking_codes.issubset(resolvable_codes)
 
 
@@ -4257,9 +4508,41 @@ def _can_merge_inputs_resolve_blocked_gate(workspace: Path, idea_id: str, merge_
             token = str(code or "").strip()
             if token:
                 resolvable_codes.add(token)
-        if not merge_input.get("resolves_issue_codes") and merge_input.get("source_issue_code"):
-            resolvable_codes.add(str(merge_input.get("source_issue_code")))
+        if not merge_input.get("resolves_issue_codes"):
+            resolvable_codes.update(_source_issue_codes_for_item(merge_input))
     return bool(resolvable_codes) and blocking_codes.issubset(resolvable_codes)
+
+
+def _merge_input_apply_blockers(item: dict[str, Any], *, allow_override_ready: bool) -> list[str]:
+    blockers: list[str] = []
+    for field in [
+        "missing_fields",
+        "review_tokens",
+        "apply_arg_conflicts",
+        "apply_arg_review_holds",
+    ]:
+        if item.get(field):
+            blockers.append(field)
+    if item.get("requires_override") and not allow_override_ready:
+        blockers.append("requires_override")
+    return blockers
+
+
+def _assert_merge_inputs_ready_to_apply(
+    merge_inputs: list[dict[str, Any]],
+    *,
+    override_consistency_gate: bool,
+) -> None:
+    for item in merge_inputs:
+        blockers = _merge_input_apply_blockers(
+            item,
+            allow_override_ready=override_consistency_gate,
+        )
+        if not blockers:
+            continue
+        input_id = str(item.get("id") or "<unknown>")
+        detail = ", ".join(blockers)
+        raise ValueError(f"merge input `{input_id}` is not ready to apply: {detail}")
 
 
 def apply_idea_merge(
@@ -4330,10 +4613,16 @@ def apply_idea_merge(
         if normalized and normalized not in requested_merge_input_ids:
             requested_merge_input_ids.append(normalized)
 
+    if requested_merge_input_ids:
+        _assert_merge_plan_fresh_for_apply(workspace, idea, idea_id)
     merge_inputs = _load_merge_inputs_from_plan(workspace, idea_id, requested_merge_input_ids) if requested_merge_input_ids else []
     merge_input = merge_inputs[0] if len(merge_inputs) == 1 else {}
     combined_merge_apply_args = (
         _combine_merge_inputs(merge_inputs, requested_merge_input_ids) if merge_inputs else {}
+    )
+    _assert_merge_inputs_ready_to_apply(
+        merge_inputs,
+        override_consistency_gate=override_consistency_gate,
     )
     if (
         not gate["can_apply_merge"]
@@ -4606,6 +4895,12 @@ def apply_idea_merge(
             idea.pop("applied_merge_input_id", None)
     idea_log["ideas"][idea_index] = idea
     write_json(workspace / "state/idea-log.json", idea_log)
+    _mark_merge_plan_applied(
+        workspace,
+        idea_id,
+        resolution_note=resolution_note,
+        merge_input_ids=requested_merge_input_ids,
+    )
 
     report = validate_workspace(workspace)
     status = collect_workspace_status(workspace)

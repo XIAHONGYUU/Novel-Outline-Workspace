@@ -1,6 +1,6 @@
 # Project Status
 
-最后更新：2026-07-28
+最后更新：2026-08-01
 
 ## 项目定位
 
@@ -45,6 +45,7 @@
   - `workspace-status` / `recommended_next_step` 现在也开始真正消费这些剩余项：纯 `reuse-ambiguity` 继续收敛到 `review-reuse`，而显式 `missing-fields` 则会改走 `repair-intake`
   - `scripts/review_reuse.py` 的非 JSON 输出现在也会直接列出 `ready_merge_inputs` 与 `remaining_review_merge_inputs`，并显示 `remaining_kind / remaining_summary`
   - 对历史 `applied` reuse review，如果旧 report 当时还没写出 `remaining_review_merge_inputs`，当前归档重建逻辑也会从旧 merge plan 自动回填 remaining 项，`demo-workspace/idea-20260705-001` 已重刷到这套新语义
+  - reuse legacy archive 回填现在也对齐统一 `review-ready` 判定，未消费的 warning-only 输入不会再从 `remaining_review_merge_inputs` 中漏掉
 
 同时，timeline merge 这条主线继续保持收紧：
 
@@ -56,6 +57,10 @@
 - `update-existing-event / update-existing-scene` 当前在旧 `label / title` 为空、但新 draft 已有标题时，也会优先回填新标题，而不再继续把它们留成 `missing_fields`
 - `update-existing-event` 当前在旧 `location` 为空、但新 draft 已有地点时，也会优先回填 draft 地点，而不要求先额外命中一条独立 `location-continuity-conflict`
 - `update-existing-scene` 当前在旧 `pov` 为空、但 scene 自己已保留稳定 `characters` 时，也会优先从角色列表回填 POV，而不再继续保留空 POV 残留
+- `update-existing-scene` 当前在旧 scene、自身 draft、linked event 三边都给不出稳定角色来源时，也会把 `scene_character_ids / scene_pov` 正式记成 `missing_fields`，不再继续写出空角色、空 POV 的半更新 scene
+- `update-existing-scene` 当前在已命中 linked event、但这条 event 自己没有稳定 `participants` 时，也不会再继续沿用旧 scene 的 `characters / pov`；人物链会显式退回缺字段，而不是写出“event 已换新、scene 人物还停在旧值”的半更新状态
+- `update-existing-event` 当前在 draft 已给出明确参与者、但 linked scene 仍保留旧 `characters` 时，也会优先使用 draft 参与者，不会被旧 scene 角色压回去
+- `update-existing-event` 当前在多条 linked scenes 指向同一 event、且这些 scene 的 `characters` 集合一致时，会把它们视为同一稳定角色来源，而不会误升级成 reuse 歧义
 - `update-existing-scene` 当前在匹配 linked event 时，也会优先吃新 draft 的 `scene_title`，而不再让旧 scene 标题压过新的匹配信号
 - `update-existing-event` 当前在回收 linked scene `characters` 时，如果旧 scene 标题已经过时，但 `event_id` 直连和地点仍然稳定，也会优先沿用这条直接关联，而不再被旧标题挡掉
 - `update-existing-scene` 当前在保留旧 `event_ids` 时，如果旧 event 标题已经过时，但 `event_id` 直连和地点仍然稳定，也会优先保住这条直接关联，而不再被旧标题挡掉
@@ -63,10 +68,15 @@
 - 其中 `event participants` 与 `scene event_ids` 两条最容易继续长分支的复用决策，当前已正式拆成独立 resolver helper，后续补规则时不必再直接改主拼装函数
 - `timeline_merge_inputs` 当前也会在整份 plan 内统一重编号，`issue-driven + default` 混合场景下不再出现重复的 `timeline-merge-001`
 - 对同一 `event / scene record` 同时命中多条 timeline 相关 issue 的 case，planner 现在也会先按 `(record_type, record_id)` 聚合，再生成一条最终 merge input，而不再把 chapter / location 修正拆成多条半更新输入
+- 这类按 record 聚合后的 merge input，当前也会把全部来源显式写进 `source_issue_codes`，而不再只能从单个 `source_issue_code` 倒推主来源
 - 对同一 identity 的 merge input，后置 dedupe 当前也不再只是“选一个主项再丢次项字段”：
   - `review_tokens / resolves_issue_codes / source_patch_suggestion_ids` 现在会显式并集
+  - `source_issue_codes` 现在也会显式并集，plan 展示层和 gate fallback 不再只看单值来源
   - `apply_args` 现在会保守回填缺失键，而不再静默吞掉另一条路径已经补齐的字段
   - 如果两条输入在同一个非空 scalar `apply_args` 键上冲突，当前也会显式写出 `dedupe-apply-args-conflict:*` warning
+  - `scene_event_ids` 这类带 tri-state 语义的 list 字段，当前也不会因为另一条路径给了非空值，就静默吃掉“仍待人工确认”的 review/blocking 语义
+  - `participant_ids` 当前也已对齐这层 review-hold 语义，不会因为另一条路径回填出参与者，就自动清掉 `reuse-ambiguity-linked-scenes` 对应的 `missing_fields`
+  - merge input 现在也会补出轻量 `apply_arg_conflicts`，显式记录 list/dict 型 `apply_args` 差异，而不再只剩一条 warning token
 - `review_reuse()` 当前也会在重建最新 merge plan 后重新判定旧 decision 是否仍然 `apply_ready`
 - 这意味着 reuse review 不会再因为旧 decision 还留在 state 里，就在 plan 已变化后继续被误当作可直接 `apply-merge`
 - 这修掉了一条真实执行层裂缝：事件不会再出现“章节已改到第 3 章，但时间顺序仍停在旧 index”的半更新状态
@@ -77,6 +87,37 @@
   - 以及两条新的执行层回归：
     - 同 identity merge input dedupe 不再静默丢 `apply_args / review_tokens / resolves_issue_codes`
     - merge plan 指纹变化后，旧 reuse review decision 会失效
+    - `scene_event_ids` 这类复用歧义字段在 dedupe 后仍保持 `missing_fields + review_tokens` 的 hold 语义
+    - `participant_ids` 这类复用歧义字段现在也保持同样的 hold 语义
+    - list 型 `apply_args` 冲突现在也会显式写进 `apply_arg_conflicts`
+    - `update-existing-scene` 在缺少稳定角色来源时，当前也会正式暴露 `scene_character_ids / scene_pov` 缺口，而不再继续产出空角色、空 POV 的 update input
+    - `update-existing-scene` 在命中的 linked event 缺少参与者时，当前也不会再继续保留 stale `scene_character_ids / scene_pov`
+    - `update-existing-scene` 在 draft 已给出明确人物、但 linked event 仍保留旧 participants 时，当前也已有回归测试固定优先 draft 人物，不会被旧 event 参与者压回去
+    - `update-existing-event` 在 draft 已给出明确参与者、但 linked scene 仍保留旧 characters 时，当前也已有回归测试固定优先 draft 参与者，不会被旧 scene 角色压回去
+    - `update-existing-event` 在多条 linked scenes 的角色集合完全一致时，当前也已有回归测试固定为非歧义复用，不会误产出 `reuse-ambiguity-linked-scenes`
+- reuse review 报告层现在也开始把 `source_issue_codes / apply_arg_conflicts / apply_arg_review_holds` 继续带进 `review_merge_inputs / remaining_review_merge_inputs / ready_merge_inputs / blocked_merge_inputs`
+- constraints review 报告层现在也开始写入 `remaining_review_merge_inputs`，归档后仍保留未消费的 constraints/blocked 输入；旧 applied report 缺该字段时会从原 merge plan 回填
+- `workspace-status` 与 orchestrator 当前也会消费 constraints report 里的 `remaining_kind=missing-fields`，先引导 `repair-intake`，避免缺字段剩余项被泛化的 constraints review 推荐压住
+- `scripts/review_reuse.py` 的 CLI 输出现在也会直接打印剩余输入的 `source issues` 与 `review hold / apply_arg_conflict` 提示，不必再回到原始 merge plan JSON 追原因
+- merge plan HTML 当前也开始直接在每条 `timeline_merge_input` 下展示 `source issues / missing fields / review tokens / warnings / review hold / apply arg conflict`
+- `workspace-status` 与 orchestrator 当前也会继续消费 reuse report 里的结构化剩余原因；在仍需 `review-reuse` 的 case 上，推荐下一步与 pipeline reason 已开始带出 `相关 issue：...` 这类更细提示，而不再只停留在泛化的“需要人工复核”
+- pipeline 显式执行 `apply-merge` 时，如果没有 constraints/reuse review decision，只有整份 merge plan 都没有 `review_tokens / missing_fields / warnings / requires_override` 时，才会直接消费 direct-ready merge inputs；否则会要求先走对应 review / repair 路径
+- pipeline 显式执行 `apply-merge` 时，如果同一 idea 同时残留 constraints 与 reuse 两份 apply-ready decision，现在会报出脏状态冲突，而不是静默优先消费其中一侧
+- `direct-ready` 与 `review-ready` 当前已收敛成共享判定：direct fallback 必须无 override 风险；review approval 可以消费需要 override gate 的输入，但不能带缺字段、warning、review token 或 apply arg conflict
+- `apply_idea_merge()` 入口层现在也已补上最终硬闸口：即使外部脚本或手动调用直接传 `merge_input_id`，带 `missing_fields / review_tokens / apply_arg_conflicts / apply_arg_review_holds` 的输入也不会被写入；`warnings` 仍会阻止 pipeline 自动 fallback，但不阻止人工显式选择某条 caveat strategy
+- `apply_idea_merge()` 直接消费 `merge_input_id(s)` 前现在还会拒绝缺失或已过期的 merge plan，避免 CLI / 函数直调用绕过 orchestrator 的 plan freshness 检查
+- 首页 `views/index.html` 当前也开始直接展示最近几条已归档的 `reuse / constraints review` 结果，不必再手动翻 `state/*-reviews/*.json`
+- review report 在切到 `applied / rejected` archive 后，当前也会补一次 views 重渲染；这修掉了一条真实展示层裂缝：report 虽然已归档，但首页仍看不到最新 review history
+- `views/review-history/index.html` 当前也已落成独立 review history 聚合页，不再只在首页露一段摘要
+- 这意味着 archived `reuse / constraints review` 现在已有两层可见入口：首页摘要负责快速提示，独立 index 负责集中回看
+- review history 索引当前也已补上 cross-link：可以从聚合页直接跳回 archived review JSON、merge plan HTML 与 validation report，而不必手工翻路径
+- archived review history 当前也开始继续消费 `action_matrix` 的首条执行结果摘要，首页与聚合页不再只显示“这条 review 已完成”，还能直接看见这次归档实际把写入落到了哪一层
+- 这条 `action_matrix` 摘要展示当前已补上 `reuse / constraints` 两条 path 的对称测试，review history 不再只对 reuse case 看起来更完整
+- archived review history 的剩余项展示现在会直接带出 `remaining_kind`，首页与独立聚合页都能区分 `reuse-ambiguity / missing-fields / needs-review` 这类后续处理原因
+- 首页与 consistency index 现在会按 idea 当前状态把历史 consistency report 标成 `archived applied / archived rejected`，已归档冲突不再伪装成当前 pending review
+- `apply_idea_merge()` 成功后会同步把对应 merge plan 标成 `applied` 并记录 `resolution_note / applied_at / applied_merge_input_id(s)`，样本 workspace 不再保留 idea 已 applied 但 plan 仍 pending 的残留状态
+- reuse review partial apply 当前已有 contract 测试固定：pipeline 只消费人工批准的 ready input，不会顺手应用仍在 `remaining_review_merge_inputs` 里的 scene reuse 歧义输入
+- legacy workspace 的 `state/workspace-status.json` 如果缺少后续新增的 view key，`collect_workspace_status()` 现在会把默认 `view_files` key 合并回来，而不再被旧快照整体覆盖
 
 ## 当前战略判断
 
@@ -266,8 +307,8 @@
 第二十一轮正式收口判断也已经完成：
 
 - `first-workflow-case/` 当前仍保持 `pending=0 / applied=1 / validate ok`
-- `demo-workspace/` 当前虽然仍有 `pending=1`，但这条 pending 已被正式归类成阶段内接受的 `review-only` path，而不是主链路缺口
-- `python3 -m unittest discover -s tests -v` 当前仍为 `145` 个测试，`OK`
+- 当时 `demo-workspace/` 仍有 `pending=1`，但这条 pending 已被正式归类成阶段内接受的 `review-only` path，而不是主链路缺口
+- 当时 `python3 -m unittest discover -s tests -v` 为 `145` 个测试，`OK`
 - `docs/p0-known-limitations.md` 已明确写出：`review-constraints` 当前可以以“报告 + 人工决策”形态视为阶段内够用
 - 因此当前不再需要把 `deterministic review writeback` 视作 `P0` 最后一项 blocker
 
@@ -285,7 +326,7 @@
   - `decision.resolution_note=...`
 - 只要这份决策仍对齐当前 merge plan，状态层就不会再把这条 idea 误打回 `repair-intake` 或重复停在 `review-constraints`
 - pipeline 执行层现在可以继续自动消费这些已批准的 ready inputs，把 review-only path 自然续到真正的 `apply`
-- `python3 -m unittest discover -s tests -v` 预计将从 `145` 个测试增长到 `146` 个测试
+- 当时 `python3 -m unittest discover -s tests -v` 从 `145` 个测试增长到 `146` 个测试
 
 第二十三轮真实 workspace 验收也已经推进：
 
@@ -429,7 +470,7 @@
 当前测试状态：
 
 - `python3 -m unittest discover -s tests -v`
-- `160` 个测试，`OK`
+- `209` 个测试，`OK`
 
 已经完成的方向：
 

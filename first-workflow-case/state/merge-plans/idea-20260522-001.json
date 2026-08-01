@@ -2,7 +2,7 @@
   "idea_id": "idea-20260522-001",
   "title": "林舟在白塔档案室发现泄密账册",
   "kind": "reveal",
-  "status": "pending",
+  "status": "applied",
   "content": "林舟在第三章的白塔档案室发现密账，由此知道议会内部有人泄密。",
   "suggested_domains": [
     "canon",
@@ -190,5 +190,11 @@
     "这条想法具体落在哪一章或哪一个 scene？",
     "这条想法对应的真实时间序号、阅读章节和参与者是什么？"
   ],
-  "created_at": "2026-06-01T12:39:21Z"
+  "created_at": "2026-06-01T12:39:21Z",
+  "resolution_note": "把林舟在第三章白塔档案室发现密账并入 timeline、outline 与 canon knowledge-state，并将地点人工确认为白塔档案室。",
+  "applied_at": "2026-06-01T12:41:37Z",
+  "applied_merge_input_ids": [
+    "timeline-merge-001",
+    "timeline-merge-know-001"
+  ]
 }

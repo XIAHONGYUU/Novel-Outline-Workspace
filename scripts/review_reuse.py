@@ -44,6 +44,24 @@ def main() -> int:
                 remaining_kind = str(item.get("remaining_kind") or "").strip() or "pending"
                 remaining_summary = str(item.get("remaining_summary") or item.get("summary") or "").strip()
                 print(f"- {merge_input_id} [{remaining_kind}]: {remaining_summary}")
+                source_issue_codes = [str(code).strip() for code in item.get("source_issue_codes", []) if str(code).strip()]
+                if source_issue_codes:
+                    print(f"  source issues: {', '.join(source_issue_codes)}")
+                for hold in item.get("apply_arg_review_holds", []):
+                    if not isinstance(hold, dict):
+                        continue
+                    field = str(hold.get("field") or "").strip()
+                    tokens = [str(token).strip() for token in hold.get("review_tokens", []) if str(token).strip()]
+                    details = f"review hold on {field}" if field else "review hold"
+                    if tokens:
+                        details += f": {', '.join(tokens)}"
+                    print(f"  {details}")
+                for conflict in item.get("apply_arg_conflicts", []):
+                    if not isinstance(conflict, dict):
+                        continue
+                    key = str(conflict.get("key") or "").strip() or "apply_args"
+                    value_kind = str(conflict.get("value_kind") or "").strip() or "value"
+                    print(f"  apply_arg_conflict {key} ({value_kind})")
         print(f"Report: {report['report_path']}")
     return 0
 

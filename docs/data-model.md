@@ -17,6 +17,8 @@
 - 最近一次校验结果
 - 推荐下一步
 
+其中 `view_files` 会以当前默认 key 为基础，再合并旧 `workspace-status.json` 里已有的自定义 key；这样 legacy workspace 在刷新状态时会自然补上新增视图入口，例如 `consistency_index` 与 `review_history_index`。
+
 ## `state/merge-plans/<idea-id>.json`
 
 记录某条 idea 的半自动 merge 计划：
@@ -38,9 +40,13 @@
 - `strategy`
 - `summary`
 - `target_files`
+- `source_issue_code`
+- `source_issue_codes`
 - `missing_fields`
 - `warnings`
 - `review_tokens`
+- `apply_arg_conflicts`
+- `apply_arg_review_holds`
 - `can_apply_directly`
 - `resolves_blocked_gate`
 - `requires_override`
@@ -49,8 +55,44 @@
 
 其中：
 
+- `source_issue_code` 当前仍保留为兼容性的“主来源 issue code”
+- `source_issue_codes` 用于显式记录这条 merge input 当前实际聚合了哪些 consistency issue，尤其用于同一 `event / scene record` 多 issue 合并后的来源保真
+- `apply_arg_conflicts` 用于显式记录 dedupe 后仍存在解释风险的 `apply_args` 差异；当前主要先覆盖 list/dict 型字段的合并冲突
+- `apply_arg_review_holds` 用于显式记录 dedupe 后仍需保留人工复核语义的字段；当前主要先覆盖 `participant_ids / scene_event_ids`
+- `update-existing-scene` 当前也会把 `scene_character_ids / scene_pov` 缺口正式写进 `missing_fields`；当旧 scene、自身 draft、linked event 都给不出稳定角色来源时，这条输入不会再继续伪装成可直接 apply
+- `update-existing-event` 的人物来源优先级是 `draft participant_ids -> linked scene characters -> existing event participants`；因此 draft 已给明确参与者时，旧 linked scene 角色只作为可被覆盖的次级信号
+- 如果多条 linked scenes 指向同一 event 且 `characters` 集合一致，这组 scene 会被视为同一个稳定角色来源；只有角色集合实际冲突时才进入 `reuse-ambiguity-linked-scenes`
 - `resolves_blocked_gate` 用于标记这条 merge input 是否能在不手动 override 的前提下结构化消解原有 gate blocker
 - `apply_args` 现在既可承载 timeline / outline / relationship，也可承载 constraint rule 更新参数
+
+当前常见的 `apply_arg_conflicts` 结构包括：
+
+- `key`
+- `value_kind`
+- `primary_only`
+- `secondary_only`
+- `conflicting_subkeys`
+
+其中：
+
+- `value_kind=list` 常用于 `scene_event_ids` 这类列表字段在 dedupe 后出现成员差异
+- `participant_ids` / `scene_event_ids` 这类字段当前还带有 review-hold 语义：即使 dedupe 后合并出了非空值，只要对应 reuse 歧义 token 仍在，`missing_fields` 也不会自动清空
+- `value_kind=dict` 当前主要作为前向兼容壳子，用于显式记录未来嵌套参数键冲突
+
+当前常见的 `apply_arg_review_holds` 结构包括：
+
+- `field`
+- `reason`
+- `review_tokens`
+
+当前执行层区分两类 ready：
+
+- `direct-ready`：用于无 review decision 的显式 `apply-merge` fallback，必须 `can_apply_directly=true` 且没有 `missing_fields / warnings / review_tokens / apply_arg_conflicts / apply_arg_review_holds / requires_override`
+- `review-ready`：用于 constraints / reuse review 里可被人工批准的输入，允许 `requires_override=true` 来消解当前 gate，但仍不能带 `missing_fields / warnings / review_tokens / apply_arg_conflicts / apply_arg_review_holds`
+
+`apply_idea_merge()` 在实际写入前也会执行最终 hard gate：显式传入 `merge_input_id` 时，不能绕过 `missing_fields / review_tokens / apply_arg_conflicts / apply_arg_review_holds`；`requires_override` 必须显式传 `override_consistency_gate` 才能消费。`warnings` 仍会让输入不属于自动 `direct-ready / review-ready`，但保留给人工显式选择 caveat strategy 时使用。
+
+显式传入 `merge_input_id(s)` 时，`apply_idea_merge()` 还会要求对应 merge plan 存在且不早于 idea 的 `updated_at`；旧 plan 必须先重跑 `plan-merge`，不能直接作为写入来源。
 
 `proposed_actions` 现在不再只是泛化 domain 提示，而是更接近执行层的 explainer。
 
@@ -88,6 +130,13 @@
 
 当前常见策略包括：
 
+- `mixed-subjects-local-signal-review-only`
+- `mixed-subjects-claim-match-review-only`
+- `same-chapter-exemption-review`
+- `prior-exception-continuity-review`
+
+当前常见 `timeline_merge_inputs[].strategy` 包括：
+
 - `create-event-and-scene`
 - `update-existing-event`
 - `update-existing-scene`
@@ -98,6 +147,48 @@
 - `resolve-world-rule-by-delaying-event`
 - `resolve-world-rule-by-updating-cutoff`
 - `document-world-rule-exception`
+
+`views/merge-plans/<idea-id>.html` 当前也会继续直接展示每条 `timeline_merge_input` 的以下解释字段，避免只能回看原始 JSON：
+
+- `source_issue_codes`
+- `missing_fields`
+- `review_tokens`
+- `warnings`
+- `apply_arg_conflicts`
+- `apply_arg_review_holds`
+
+`views/index.html` 当前也会继续展示最近几条已归档的 review 结果，直接消费：
+
+- `state/reuse-reviews/*.json`
+- `state/constraint-reviews/*.json`
+
+首页的 review history 区块当前主要展示：
+
+- `review_state`
+- `review_status_summary`
+- `action_matrix` 的首条执行结果摘要
+- `remaining_review_merge_inputs` 的首条 `remaining_kind + remaining_summary`
+- 结构化剩余原因的首条 detail summary（例如 `source_issue_codes` / `apply_arg_conflicts` / `apply_arg_review_holds` 收敛出的说明）
+
+`views/review-history/index.html` 当前会把这两类 archived review 继续汇总成独立索引页：
+
+- `state/reuse-reviews/*.json`
+- `state/constraint-reviews/*.json`
+
+当前索引页按最新 archive 时间优先展示，并显式列出：
+
+- `idea_id`
+- `title`
+- `kind`
+- `review_state`
+- `review_status_summary`
+- `action_matrix` 的首条执行结果摘要
+- 剩余项类型、摘要与首条结构化 detail reason
+- `validation_ok`
+- cross-links to:
+  - archived review `report_path`（HTML 中使用 workspace 相对链接，避免把本机绝对路径写进页面）
+  - `merge_plan_view_path`
+  - latest `validation_report_path` when available
 
 其中 world-rule 相关输入常会在 `apply_args` 里额外携带：
 
@@ -134,6 +225,7 @@
 - `review_policy_summary`
 - `constraints_summary`
 - `review_checklist`
+- `remaining_review_merge_inputs`
 - `ready_merge_inputs`
 - `blocked_merge_inputs`
 - `action_matrix`
@@ -151,8 +243,11 @@
 - `review_status_summary` 用于给状态层、脚本输出和人工查看提供一句稳定摘要，避免已消费的 report 仍看起来像待处理 case
 - `review_policy` / `review_policy_summary` 用于把当前默认策略矩阵写成稳定 token 与可展示摘要
 - `review_checklist` 用于给人工复核提供一组确定性检查项
+- `remaining_review_merge_inputs` 用于在 live review 与 archived history 里都显式保留“这轮没有被消费、仍待后续收口的 constraints/blocked 输入”
 - `ready_merge_inputs` 用于列出“复核通过后可以直接消费”的 merge inputs，避免这类 case 被误打回 `repair-intake`
 - `action_matrix` 用于把 `constraints / timeline / outline / canon` 各层当前的 `readiness` 一次性摊平，方便判断这条 idea 是“纯 review-only”还是“review + ready inputs 共存”
+- `remaining_review_merge_inputs[].remaining_kind` 当前常见值包括 `constraints-review`、`missing-fields`、`needs-review`
+- `remaining_review_merge_inputs[].remaining_summary` 用于把这条剩余输入当前还缺什么或仍需哪类复核写成一句稳定摘要
 - `decision` 用于把人工复核后的确定性写回结果正式落进同一份 state 产物，而不是只停在口头备注
 - `applied_result` 用于在 decision 已被消费后保留一份轻量的执行结果摘要，而不必回头重算 live review 状态
 
@@ -186,6 +281,7 @@
 
 - `review_required=false`
 - `review_checklist=[]`
+- `remaining_review_merge_inputs` 继续保留未消费输入；旧归档如果缺这个字段，会优先从原 merge plan 回填
 - `ready_merge_inputs=[]`
 - `blocked_merge_inputs=[]`
 - `consistency_gate.status=consumed` 或 `closed`
@@ -237,6 +333,7 @@
 - `review_merge_inputs` 用于单独列出真正停在 reuse 复核上的那几条 merge inputs
 - `remaining_review_merge_inputs` 用于在 live review 与 archived history 里都显式保留“这轮没有被消费、仍待后续收口的输入”，避免只剩一条 resolution note；
   它当前既可能包含 reuse 歧义输入，也可能包含仍缺字段的 blocked 输入
+- 上述 `review_merge_inputs / remaining_review_merge_inputs / ready_merge_inputs / blocked_merge_inputs` 当前也会继续保留 merge input 上的 `source_issue_codes / apply_arg_conflicts / apply_arg_review_holds`，方便 review report 和 CLI 直接解释这条输入为什么仍要人工确认
 - `remaining_review_merge_inputs[].remaining_kind` 用于区分这条剩余输入当前为什么还没被消费；当前常见值包括：
   - `reuse-ambiguity`
   - `missing-fields`
@@ -246,8 +343,10 @@
 - `ready_merge_inputs` / `blocked_merge_inputs` 用于把“同一条 idea 里哪些输入在 reuse 歧义之外已结构完整、哪些仍缺字段”一次性摊平；
   对 `review-reuse` 来说，`ready_merge_inputs` 当前表示“复核 reuse 歧义后即可继续消费”的输入，
   不要求这些输入在原始 gate 下已经是 `can_apply_directly=true`
+- `workspace-status` / orchestrator 当前也会继续消费 `remaining_review_merge_inputs` 里的结构化剩余原因；除 `remaining_kind / remaining_summary` 外，也可能继续把 `source_issue_codes / apply_arg_conflicts / apply_arg_review_holds` 收敛进推荐下一步的说明文案
 - `decision` 用于把 reuse 复核后的确定性写回结果正式落进同一份 state 产物，而不是只停在口头备注
 - `applied_result` 用于在 decision 已被消费后保留一份轻量的执行结果摘要
+- 当 review report 从 live review 切到 archive 后，当前也会重新触发一次 workspace views 渲染，避免 `views/index.html` 仍停留在旧的“看不到 review history”状态
 
 当 `decision` 已写回时，当前常见字段包括：
 

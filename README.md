@@ -32,7 +32,7 @@
 
 ## 当前状态
 
-到 `2026-07-05` 为止，`P0` 主链路已经正式收口，默认工作流是：
+到 `2026-08-01` 为止，`P0` 主链路已经正式收口，当前处于 `P1 执行层厚化与 review writeback 期`，默认工作流是：
 
 `ingest -> check-consistency -> plan-merge -> apply-merge -> validate`
 
@@ -137,8 +137,9 @@
 
 当前下一阶段重点不再是补 `P0` 闭环，而是增强：
 
-- `review-constraints` 的 deterministic writeback
 - `novel-timeline-merge`
+- timeline merge 执行层厚化，尤其是 event / scene reuse、字段优先级、tri-state review hold 与 dedupe 后解释字段
+- archived `reuse / constraints review` 的剩余项与执行结果表达维护
 - `repair-intake -> plan-merge -> apply-merge` 的工作区级集成闭环
 - 更细的 timeline-order / world-rule exception 规则
 - 更细的 world-rule / mixed-subject exception 边界
